@@ -1,0 +1,9 @@
+name: change_outfit
+desc: 完整审视包括内衣裤、鞋和配饰的穿着，并按自己的选择真正换好、保留或不穿
+state_effects:
+  aesthetic:
+    direction: up
+    magnitude: medium
+applies_when: 想改变 top/bottom/outer/bra/panties/socks/shoes/accessory；标量槽位更换写 selector、保留省略、不穿写 null；accessory 更换写 selector 数组、保留省略、不戴写 []；原样保留时跳过
+capabilities:
+  - inventory

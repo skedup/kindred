@@ -1,0 +1,12 @@
+{
+  "id": "kindred-mouth",
+  "name": "Kindred Mouth",
+  "description": "Injects the current Kindred context into one approved direct peer.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

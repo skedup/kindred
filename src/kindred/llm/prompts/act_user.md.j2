@@ -1,0 +1,63 @@
+{#
+  T2.act.llm 的 user prompt 模板。
+  activity SKILL 段先投影为结构化 ActPromptContext，再由纯 renderer 算好
+  skill_section 传入；模板本身不读取 package。step 引导文案在本模板按
+  kind / current_step 分支渲染（⑥-act：告诉心「你此刻在哪一 step」，防原地踏步）。
+
+  渲染上下文：
+  - triggered_at: str        本 tick 时间
+  - kind: str                act 决策类型（start_activity / advance_* / end_activity）
+  - target: str              生效 activity 名（effective_activity）
+  - skill_section: str       activity SKILL 渲染段；start/advance 含执行契约，end 只保留收尾必要事实与完整正文
+  - presence_section: str    当前物理在场事实；advance/end 时含当前活动参与者
+  - current_step: str | None 上一拍停在的 step（advance/end 时有；start 时 None）
+  - location_section: str    地点上下文段（进行中目的地计划 + find_places 工具入口）；无则为空
+  - possession_facts_section: str 当前穿着与随身事实；仅相关 Activity 披露
+  - outbound_fact_section: str 外部发送事实段（send_to_user 是否真的成功）；无则为空
+  - artifact_section: str 当前 Activity run 中可消费的 committed artifact；无则为空
+  - decision_handoff_section: str Sense 已消化的本拍 note + 决定缘由；无则为空
+  - en_route_destinations: list[str]  进行中目的地计划的地点名（L5 en route 引导）；无则空列表
+#}
+[act.llm tick @ {{ triggered_at }} kind={{ kind }} target={{ target }}]
+{{ skill_section }}
+{{ presence_section }}
+{% if location_section %}
+{{ location_section }}
+{% endif %}
+{% if possession_facts_section %}
+{{ possession_facts_section }}
+{% endif %}
+{% if outbound_fact_section %}
+{{ outbound_fact_section }}
+{% endif %}
+{% if artifact_section %}
+{{ artifact_section }}
+{% endif %}
+{% if decision_handoff_section %}
+{{ decision_handoff_section }}
+{% endif %}
+## 你此刻在哪一 step
+{% if kind == "start_activity" -%}
+这是刚 start 的新活动。选择本拍真实执行或开始推进的第一个原子动作，并把截至本拍已发生的事实写入
+final_state_diff；current_state 记录本拍所在的动作，不是下一拍计划。
+{%- elif kind == "end_activity" -%}
+{% if current_step -%}你上一拍在：**{{ current_step }}**。{% else -%}这件事尚未落下明确 step。{% endif -%}
+这次已经决定收尾；如实结清这一程，系统会进入 settle 谢幕，不要再推进新的原子动作。
+{%- elif not current_step -%}
+当前还没落 step。选择一个本拍真实执行或开始推进的原子动作，并把截至本拍已发生的事实写入
+final_state_diff；不要只宣布下一步准备做什么。
+{%- elif en_route_destinations and kind == "advance_activity" -%}
+你上一拍在：**{{ current_step }}**，且有进行中的目的地计划（去「{{ en_route_destinations | join('」「') }}」）。
+在路上的拍子，停在移动动作继续走是**正确**的，不算原地踏步——没真实到达就不要切到下一个动作假装到了。
+真实到达的这一拍：**调用 arrive 工具**（参数复用目的地计划），current_state 仍只记录本拍
+真实执行或正在推进的动作。若只推进了移动就保持移动动作；只有到达后同拍也真实执行了下一动作，
+才写下一动作。
+改主意不去了：调用 abandon 工具，并在 desc 里如实表达停下/折返；这件事要不要收尾、要不要换做别的，是下一拍心跳的决定，本次照常落实 advance。
+现实条件已不支持继续前往时，调用 abandon 工具并在 desc 里如实表达，别假装还在路上。
+{%- else -%}
+你上一拍在：**{{ current_step }}**。
+这是个状态机：当前动作做够后可以在本拍真正执行下一个动作；final_state_diff.current_state
+记录本拍真实执行或正在推进的动作，不是下一拍计划。**真实推进时可以保持当前 step；没有新增事实时
+不要机械重复，也别靠填写尚未发生的动作推进状态机**。
+若所有原子动作都走完、终止条件满足了，就 kind=end_activity 收尾（进 settle 谢幕）。
+{%- endif %}

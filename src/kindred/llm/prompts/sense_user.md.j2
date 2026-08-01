@@ -1,0 +1,137 @@
+{#
+  T1.sense.llm 的 user prompt 模板（docs/14 §3.3）。
+
+  段落顺序遵循 Lost-in-the-Middle 提示词工程原则（skedush 2026-06-22）：
+  LLM 对 prompt 首部 + 尾部注意力最强、中部最易丢失。所以——
+  - 开头：静态底色（人格 / identity / user / 高光）。每拍不变，先立人设，
+    放开头可稳定锚定，且不占用「当拍信息」的注意力预算。
+  - 中部：背景信息（嘴已说出口的话 / 轨迹）。可丢部分细节不致命。
+  - 尾部黄金区：⭐ 当拍决策硬信号——当前活动 + terminal_when + stuck 警告 +
+    当前状态 needs/affect/mood/念头 + last_note。当前事实和 canonical State 优先，
+    last_note 只保留主观连续性；这些共同参与「这一拍干啥」，
+    顶到模型注意力最强的尾部（治吃鱼死循环：hunger/terminal_when 不再被中部轻视）。
+  - 最尾：可选活动清单 + 输出指令。
+
+  渲染上下文（由 _render_sense_prompt 注入）：
+  - soul_excerpt: str        L2，人格摘录（无种子时为空 → 段降级）
+  - identity: str            L2，自我陈述 IDENTITY（缺失为空 → 段降级）
+  - user: str                L2，你对这个人的理解 USER（缺失为空 → 段降级）
+  - bundle_highlights: str   L2，高光闪回（dream 沉淀，早期为空 → 段降级）
+  - triggered_at: str        本 tick 时间
+  - situation_block: str     处境块（location / environment 属性分块；③处境维进心的感知）
+  - possession_facts_section 当前全部穿着、妆容与随身事实（不含 Catalog/key）
+  - body_line                当前身体综合感受
+  - mood_val / mood_desc     当前心情
+  - inner_pulse_line         当前模糊的内在涌动
+  - needs_line / affect_line 带稳定方向语义的 Needs / Affect 一行
+  - thoughts_line            当前念头
+  - last_note_line           上一拍的内心独白（主观余韵，不覆盖当前事实）
+  - current_partner_input    本拍对方新表达（完整、尾部决策区）
+  - mouth_context            你/嘴已经说出口的话（可压缩、仅作背景）
+  - unknown_chat_context     未识别 role 的显式背景
+  - presence_before_line     本拍观察前的物理 Presence
+  - recent_contact_line      近期联系事实（窗口外为空）
+  - traj_line                最近轨迹（recent_ticks 渲染）
+  - activities_line          可选活动清单（名 + desc）
+  - current_activity_line    上一拍你停在的活动状态 + step（settle 长尾时为空）
+  - stuck_warning_line       原地打转警告（连续多拍同 activity+step 才非空 → 治死循环）
+
+  jinja2 用 trim_blocks/lstrip_blocks，{%-/-%} 控制空白。
+#}
+{%- if soul_excerpt %}
+你是谁（你的人格，read 自灵魂摘录）：
+{{ soul_excerpt }}
+
+{% endif -%}
+{%- if identity %}
+你对自己的陈述（IDENTITY）：
+{{ identity }}
+
+{% endif -%}
+{%- if user %}
+你对这个人的理解（USER）：
+{{ user }}
+
+{% endif -%}
+{%- if bundle_highlights %}
+你记得的高光时刻（闪回）：
+{{ bundle_highlights }}
+
+{% endif -%}
+你或你的嘴已经说出口的话（只是背景；不是对方的新表达，也不是 Presence 事实源）：
+{{ mouth_context }}
+{%- if unknown_chat_context %}
+
+未识别来源的聊天背景（已显式标注；不要当作对方或嘴）：
+{{ unknown_chat_context }}
+{% endif %}
+{%- if recent_contact_line %}
+
+{{ recent_contact_line }}
+{% endif %}
+
+最近的轨迹（更早之前你经历的，最新在前）：
+{{ traj_line }}
+{% if action_result_grade_line %}
+
+上一拍 Action 的体验结果（只帮助你理解刚发生的体验，不是新的行动或硬事实）：
+{{ action_result_grade_line }}
+- 档位只表示相对通常情况的体验位置，不代表底层成功、心情、满意度、奖励或 State effect。
+- 结合动作含义、Activity 意图与当前场景自然理解；已确认事实和 canonical State 不可改写。
+- 不创造天气、人物、NPC 或 Encounter，也不要重演上一拍 Action。
+- 不复述字母、档位、评分或系统规则；不强制提高 significance、切换 Activity、补偿或继续行动。
+- 结果可以只留在内在理解里，不要求显式汇报。
+{% endif %}
+
+═══════════════════════════════════════════
+⭐ 此刻最该看清的（你这一拍决策的直接依据）
+═══════════════════════════════════════════
+
+现在是一个心跳（tick @ {{ triggered_at }}）。
+你此刻的处境（你在哪、外面什么天——它会浸染你的心情/念头/氛围）：
+{{ situation_block }}
+
+{{ possession_facts_section }}
+
+本拍 Presence 观察与 partner 事件评价（先观察，再生活）：
+- 本拍观察前的物理状态：{{ presence_before_line }}
+- 本拍观察前的 Affect：{{ affect_line }}
+- 本拍对方的新表达（按原顺序；只有这里能决定 observed_user_present 和 affect_event_response）：
+{{ current_partner_input }}
+- 先仅根据这些新表达给出 observed_user_present；再评价它们引起的 affect_event_response；
+  然后应用两者，最后让同拍 note、mood_subjective、thought_diff、ambience 和 act_decision
+  与应用后的有效 Presence/Affect 保持一致。
+- 对方重复明确表达、或你/嘴已经回应过，仍按字面观察；同拍多条里以最后一条明确的当前事实为准。
+- affect_event_response 最多两个 up/down 方向；中性表达允许 {}。它不是 Needs、奖励、成功状态
+  或绝对值；静态 Needs/Affect、“最近的联系”、旧轨迹、旧念头和你/嘴都不是该入口的事件源。
+
+你当前的内在状态：
+- 身体 body：{{ body_line }}
+- 心情 mood：{{ mood_val }}（{{ mood_desc }}）
+- 内在涌动 inner_pulse：{{ inner_pulse_line }}
+- 需要与满足 needs：{{ needs_line }}
+- 当前念头：{{ thoughts_line }}
+
+你上一拍的内心独白（上一拍残留的主观余韵；当前事实与 canonical State 更优先）：
+{{ last_note_line }}
+{% if current_activity_line %}
+
+上一拍你停在的状态（还没裁决的起点——现在要决定：继续推进？收尾 end？还是换件事？）：
+{{ current_activity_line }}
+{% endif %}
+{% if stuck_warning_line %}
+
+{{ stuck_warning_line }}
+{% endif %}
+
+可选的活动（act=true 时 target_activity 只能从中选一个，原样填注册名，不要翻译成中文、不要自造新名）：
+{{ activities_line }}
+
+怎么活（别卡死自己）：
+- act=false 就是这一拍**没有行动发生**：可以放空、发呆、感受或回味，但不能借 note 偷偷完成
+  换衣/装包、移动/到达、吃饭、购物、发送等会改变生活事实的动作，也不要让数值大幅变化。
+- 想落实一件事时，从可选清单里选择能承载它的 Activity；若清单里没有，先安静留住念头，
+  不要把 note 当成独立 action 通道。
+- 需要恢复时 start 能恢复的活动；当前活动满足 terminal_when 时 end_activity 收尾，不用 act=false 表达放弃。
+
+基于这些，输出你此刻的心跳 JSON（严格按 schema）。

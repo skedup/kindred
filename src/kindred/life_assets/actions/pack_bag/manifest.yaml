@@ -1,0 +1,9 @@
+name: pack_bag
+desc: 选择随身包并真正整理好这次需要或只是想带着的物品
+state_effects:
+  comfort:
+    direction: up
+    magnitude: small
+applies_when: 确实想改变随身包或包内物品；实用、安心、审美、纪念或单纯喜欢都成立，现状合心意时跳过
+capabilities:
+  - inventory

@@ -1,0 +1,35 @@
+name: visit_cultural_place
+description: 想接触更完整、更有质感的新鲜输入时，去附近的展馆、博物馆、图书馆或书店慢慢看看；天气影响出行方式，但不默认否决这件事
+location_bindings:
+  culture_place:
+    query: 附近适合安静停留、看展、阅读或接触新鲜事物的文化空间
+    categories: [museum, art_gallery, exhibition_hall, library, bookstore]
+    radius_min_km: 0
+    radius_max_km: 8
+    limit: 5
+uses:
+  - action: change_outfit
+    intent: 只有当前位于 home、能拿到自己的衣柜且确实想为这次出门调整穿着时，换一身合适的
+  - action: makeup
+    intent: 只有当前位于 home、手边有化妆用品且确实想带着妆出门时，才上妆或补妆
+  - action: pack_bag
+    intent: 只有当前位于 home、能拿到自己的包且这次停留需要或只是想换包、带些东西时，整理好再出门
+  - action: walk
+    intent: 距离、天气和体力适合时，步行前往选中的文化空间
+    bind_places:
+      destination: culture_place
+  - action: ride
+    intent: 距离、天气或体力更适合乘车时，坐车前往选中的文化空间
+    bind_places:
+      destination: culture_place
+  - action: explore_place
+    intent: 到达后慢慢看展陈、书架、空间与周围细节，让新鲜事物真正进入这一段生活
+    bind_places:
+      venue: culture_place
+terminal_when: |
+  已经真实到达，并在 explore_place 状态下看够了、注意力已经饱和或有一个感受可以带回来时，就 end_activity。
+  任意阶段若查不到合适地点、场所不适合停留、临时失去兴趣或无法继续，也可以如实 end_activity，
+  不要虚构移动、到达或看见的内容。
+duration_hint: medium
+produces: optional
+requires: []

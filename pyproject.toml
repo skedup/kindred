@@ -1,0 +1,172 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kindred"
+version = "0.1.0"
+description = "OpenClaw-native runtime for an autonomous AI resident"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+  { name = "Kindred contributors" },
+]
+keywords = ["ai", "companion", "langgraph", "agent"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 运行时依赖（最小化，按需追加）
+dependencies = [
+  "kindred-capability-sdk>=0.1.0,<0.2",
+  "kindred-capability-compose>=0.1.0,<0.2",
+  "kindred-capability-inventory>=0.1.0,<0.2",
+  "kindred-capability-send>=0.1.0,<0.2",
+  "click>=8.1",          # CLI
+  "pydantic>=2.0",       # state 数据结构
+  "langgraph>=0.2",      # graph 编排（PoC 5/29 已验证可跑）
+  "jinja2>=3.1",         # llm/prompts/ 模板
+  "httpx>=0.25.2",       # HTTP-based LLM and Provider clients
+  "pyyaml>=6.0",         # activity SKILL frontmatter 解析（docs/15）
+  "websocket-client>=1.6",  # GatewayClient 拉 chat.history
+  "cryptography>=42",    # ed25519 device identity for Gateway v4 pairing
+  "packaging>=23",       # Portable capability Requires-Dist compatibility preflight
+]
+
+[project.urls]
+Homepage = "https://github.com/skedup/kindred"
+Repository = "https://github.com/skedup/kindred"
+Issues = "https://github.com/skedup/kindred/issues"
+Documentation = "https://github.com/skedup/kindred#readme"
+
+[project.optional-dependencies]
+# 只读可视化 web 后端（kindred serve）。**运行时** optional extra：
+# 核心心跳不依赖它，终用户按需 ``pip install kindred[web]``。
+web = [
+  "fastapi>=0.110",      # 只读 HTTP 视图层
+  "uvicorn>=0.27",       # ASGI server
+]
+draw = [
+  "kindred-capability-draw>=0.1.0,<0.2",
+]
+
+# ---- dev 门检依赖（PEP 735 dependency-groups）----
+# 为什么不用 [project.optional-dependencies].dev：
+#   项目门检是 ``uv run mypy`` / ``uv run pytest``。``uv run`` **默认自动同步**
+#   ``[dependency-groups].dev``，但**不**自动装 optional-dependencies 里的 extra。
+#   若 dev 工具（含 web 测试用的 fastapi）放 extra，干净环境默认门检拿不到
+#   → ``uv run mypy`` 报 fastapi import-not-found、``uv run pytest`` collection 断。
+#   放进 dependency-groups 后，web 源码/测试进默认检查面，依赖也随默认同步。
+[dependency-groups]
+dev = [
+  "pytest>=7.0",
+  "pytest-cov>=4.0",
+  "ruff>=0.6",
+  "mypy>=1.0",
+  "types-PyYAML",        # mypy stub for pyyaml
+  "fastapi>=0.110",      # web 层测试（TestClient）+ mypy 检 src/kindred/web
+  "uvicorn>=0.27",       # serve 命令
+]
+
+[project.scripts]
+# 安装后命令行可直接 `kindred ...`
+kindred = "kindred.cli:main"
+
+# ---- src layout 配置 ----
+[tool.hatch.build.targets.wheel]
+packages = ["src/kindred"]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+  "hatch_build.py",
+  "src/kindred",
+  "scripts/build_web.py",
+  "web/.node-version",
+  "web/env.d.ts",
+  "web/index.html",
+  "web/package.json",
+  "web/pnpm-lock.yaml",
+  "web/pnpm-workspace.yaml",
+  "web/src",
+  "web/tsconfig.json",
+  "web/tsconfig.node.json",
+  "web/vite.config.ts",
+  "README.md",
+  "LICENSE",
+  "pyproject.toml",
+]
+
+[tool.hatch.build.targets.sdist.force-include]
+"src/kindred/web/static" = "src/kindred/web/static"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+kindred-capability-sdk = { workspace = true }
+kindred-capability-draw = { workspace = true }
+kindred-capability-compose = { workspace = true }
+kindred-capability-inventory = { workspace = true }
+kindred-capability-send = { workspace = true }
+
+# ---- pytest ----
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+pythonpath = [
+  "src",
+  "packages/kindred-capability-sdk/src",
+  "packages/kindred-capability-draw/src",
+  "packages/kindred-capability-compose/src",
+  "packages/kindred-capability-inventory/src",
+  "packages/kindred-capability-send/src",
+]
+
+# ---- ruff（lint + format） ----
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = [
+  "src",
+  "tests",
+  "packages/kindred-capability-sdk/src",
+  "packages/kindred-capability-draw/src",
+  "packages/kindred-capability-compose/src",
+  "packages/kindred-capability-inventory/src",
+  "packages/kindred-capability-send/src",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes
+  "I",   # isort
+  "B",   # flake8-bugbear
+  "UP",  # pyupgrade
+]
+# RUF001/002/003（模糊 unicode）在中文 docstring/comment 下噪音太大（中文标点被误报）。
+# 零宽空格 U+200B 类不可见字符改由 `tests/test_no_invisible_chars.py` 防御。
+
+# ---- mypy ----
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = [
+  "src/kindred",
+  "packages/kindred-capability-sdk/src/kindred_capability_sdk",
+  "packages/kindred-capability-draw/src/kindred_capability_draw",
+  "packages/kindred-capability-compose/src/kindred_capability_compose",
+  "packages/kindred-capability-inventory/src/kindred_capability_inventory",
+  "packages/kindred-capability-send/src/kindred_capability_send",
+]

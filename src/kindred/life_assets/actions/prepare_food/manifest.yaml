@@ -1,0 +1,7 @@
+name: prepare_food
+desc: 在家里把已有食材或食物整理、加热或做成可以吃的一顿
+state_effects:
+  fatigue:
+    direction: up
+    magnitude: small
+applies_when: 人在能准备食物的地方，手边确实有可用的食材或食物，而且这一顿还没有准备好

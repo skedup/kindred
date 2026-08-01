@@ -1,0 +1,14 @@
+name: eat
+desc: 坐下来吃东西
+state_effects:
+  hunger:
+    direction: down
+    magnitude: large
+  comfort:
+    direction: up
+    magnitude: small
+applies_when: 需要在有食物的地方 —— 餐厅 / 家里厨房 / 带了吃的
+place_slots:
+  venue:
+    needed_for: 把 eating 落实到一个可吃饭的地点
+    description: 吃饭发生的地点

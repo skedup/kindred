@@ -1,0 +1,129 @@
+/* Kindred 可视化 —— 全局样式。
+   基调：温暖、安静、留白。不是数值仪表盘，是「观察 ta 的生活」的窗。
+   深酒红 / 暖灰 / 米白，呼应 ta 的底色。 */
+
+:root {
+  --bg: #1a1416;
+  --bg-card: #241b1e;
+  --bg-card-hover: #2c2125;
+  --border: #3a2c30;
+  --text: #e8ddd9;
+  --text-dim: #a8968f;
+  --text-faint: #7a6a64;
+  --accent: #8b2f3f; /* 深酒红 */
+  --accent-soft: #b25668;
+  --gold: #c9a86a; /* 高光 */
+  --radius: 14px;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+
+.app-header {
+  text-align: center;
+  margin-bottom: 8px;
+}
+.app-header h1 {
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0 0 4px;
+}
+.app-header .subtitle {
+  color: var(--text-faint);
+  font-size: 0.86rem;
+  font-style: italic;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin: 24px 0 28px;
+}
+.tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 7px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.18s ease;
+}
+.tab:hover {
+  color: var(--text);
+  border-color: var(--accent-soft);
+}
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  box-shadow: var(--shadow);
+}
+
+.state-msg {
+  text-align: center;
+  color: var(--text-faint);
+  padding: 48px 20px;
+  font-style: italic;
+}
+.state-msg.error {
+  color: var(--accent-soft);
+  font-style: normal;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+.faint {
+  color: var(--text-faint);
+}
+
+button.more {
+  display: block;
+  margin: 22px auto 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 9px 26px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.88rem;
+  transition: all 0.18s ease;
+}
+button.more:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent-soft);
+}
+button.more:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

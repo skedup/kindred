@@ -1,0 +1,7 @@
+name: remove_makeup
+desc: 卸掉当前妆容，让脸和身体放松下来
+state_effects:
+  comfort:
+    direction: up
+    magnitude: small
+applies_when: 当前确实有妆，需要卸妆；无妆时自然跳过

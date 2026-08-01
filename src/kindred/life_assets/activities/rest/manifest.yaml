@@ -1,0 +1,35 @@
+name: rest
+description: 身体明确需要休息或睡一觉，想去能安心躺下的地方恢复；重点是睡下，不只是回家
+location_bindings:
+  rest_place:
+    query: 适合这次休息补觉、能躺下的地方；优先考虑家或安静安全的休息处
+    categories:
+      - home
+      - lodging
+    radius_min_km: 0
+    radius_max_km: 5
+    limit: 5
+uses:
+  - action: walk
+    intent: 拖着疲惫的身体回家 / 去能躺下的地方
+    bind_places:
+      destination: rest_place
+  - action: ride
+    intent: 距离、天气或体力不适合步行时，乘车去能躺下的地方
+    bind_places:
+      destination: rest_place
+  - action: change_outfit
+    intent: 只有当前 state.location.type=home、确实能拿到自己的衣柜且穿着不适合睡时，换成舒服的休息穿着
+  - action: remove_makeup
+    intent: 到了能休息的地方后，如果有妆就卸掉，让脸也放松下来
+  - action: sleep
+    intent: 躺下，让身体和精神都缓过来
+    bind_places:
+      venue: rest_place
+terminal_when: |
+  在 sleep 状态下，energy 基本回满、疲惫消退了，这次休息就完成了，可以 end_activity。
+  任意阶段若改变主意、不再想睡，或当前条件无法继续，也可以如实 end_activity，不要虚构移动、换衣或睡眠。
+  还没缓过来就继续睡（停在 sleep）。
+duration_hint: long
+produces: optional
+requires: []

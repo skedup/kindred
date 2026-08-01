@@ -1,0 +1,14 @@
+name: ride
+desc: 乘车前往目的地 —— 由车辆承载的移动
+state_effects:
+  energy:
+    direction: down
+    magnitude: small
+  fatigue:
+    direction: up
+    magnitude: small
+applies_when: 有明确目的地，而且此刻选择乘坐汽车、出租车、公交或地铁前往
+place_slots:
+  destination:
+    needed_for: 一段明确目的地的乘车移动
+    description: 要乘车去的地方

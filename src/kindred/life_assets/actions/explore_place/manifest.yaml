@@ -1,0 +1,14 @@
+name: explore_place
+desc: 在已经抵达的地方慢慢观看、阅读或走动，留意空间与其中的细节
+state_effects:
+  stimulation:
+    direction: up
+    magnitude: medium
+  fatigue:
+    direction: up
+    magnitude: small
+applies_when: 已经真实到达一个适合停留、观看或阅读的地点
+place_slots:
+  venue:
+    needed_for: 把观看、阅读或探索落实到一个真实地点
+    description: 正在停留和探索的地点

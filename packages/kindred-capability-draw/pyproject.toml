@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kindred-capability-draw"
+version = "0.1.0"
+description = "Reference Portable draw capability for Kindred"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+  "httpx>=0.25.2,<1",
+  "kindred-capability-sdk>=0.1.0,<0.2",
+]
+
+[project.urls]
+Repository = "https://github.com/skedup/kindred"
+Issues = "https://github.com/skedup/kindred/issues"
+
+[project.entry-points."kindred.capability.v1"]
+draw = "kindred_capability_draw.plugin:create_capability"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kindred_capability_draw"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src/kindred_capability_draw"]

@@ -1,0 +1,30 @@
+name: Capability proposal
+description: Propose a portable capability without coupling it to the core graph.
+title: "[Capability]: "
+labels: [capability]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Describe contracts and data flow, not private provider payloads or credentials.
+  - type: textarea
+    id: user_value
+    attributes:
+      label: Resident-facing value
+      description: What can the resident perceive or do with this capability?
+    validations:
+      required: true
+  - type: textarea
+    id: tools
+    attributes:
+      label: Proposed tools and effects
+      description: List minimal ToolDefs, effects, authorization needs, and side effects.
+    validations:
+      required: true
+  - type: textarea
+    id: data_flow
+    attributes:
+      label: Provider and data flow
+      description: Identify data leaving the host and the safe trace projection.
+    validations:
+      required: true

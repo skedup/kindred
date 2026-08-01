@@ -1,0 +1,4 @@
+# esbuild（vite 的传递依赖）有 postinstall build script，下载平台预编译二进制。
+# pnpm 默认拦截传递依赖的 build script，这里显式批准 esbuild（安全：官方包）。
+allowBuilds:
+  esbuild: true

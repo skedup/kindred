@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible Kindred defect using synthetic or redacted facts.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not include Persona, messages, addresses, configuration files, debug dumps,
+        session/account/target values, credentials, private keys, or resident data.
+  - type: input
+    id: version
+    attributes:
+      label: Kindred version
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS 14+ arm64
+        - Ubuntu 24.04 x86_64
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Safe reproduction and observed behavior
+      description: Use synthetic values and include the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Safe diagnostic shape
+      description: List doctor check IDs and statuses only. Do not paste full output.

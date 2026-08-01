@@ -1,0 +1,24 @@
+{#
+  dream Step 3.reflect 的 user prompt 模板。
+  灵魂三件套 + 昨日摘要由 _render_reflect_prompt 传入（空值已兜底为占位）。
+
+  渲染上下文：
+  - soul / identity / user: str   灵魂三件套当前内容（空 → "（空）"）
+  - summary: str                  昨日摘要（空 → "（昨日无摘要）"）
+#}
+【你的灵魂当前内容】
+SOUL.md:
+{{ soul }}
+
+IDENTITY.md:
+{{ identity }}
+
+USER.md:
+{{ user }}
+
+【昨日摘要】
+{{ summary }}
+
+【反思任务】
+昨天有没有什么经验值得加进灵魂？有没有哪段灵魂已不合现在的我？
+什么都不改就 skip_today；真有值得沉淀的才 do_change。

@@ -1,0 +1,33 @@
+name: eat_at_home
+description: 想回家或留在家里安稳吃一顿，让已经浮上来的胃口或馋意真正落下来
+location_bindings:
+  home_place:
+    query: 自己的家，那个可以准备或吃下这一顿的固定住处
+    categories:
+      - home
+    radius_min_km: 0
+    radius_max_km: 30
+    limit: 3
+uses:
+  - action: walk
+    intent: 人还在外面时，朝家走回去，让这一顿能够在家里发生
+    bind_places:
+      destination: home_place
+  - action: ride
+    intent: 人在外面且距离、天气或体力更适合乘车时，坐车回家
+    bind_places:
+      destination: home_place
+  - action: prepare_food
+    intent: 这一顿还没准备好时，用手边已有的东西整理、加热或做成可以吃的食物
+  - action: eat
+    intent: 吃下家里已有或已经准备好的食物，让饥饿真正缓下来
+    bind_places:
+      venue: home_place
+terminal_when: |
+  在 eat 状态下，已经吃够了或 hunger 明显降下来，就 end_activity。
+  任意阶段若发现没有可用食物、无法准备，或此刻不再想吃，也可以如实 end_activity，并说明这顿没有吃成。
+  已经在家就跳过 walk；有现成食物时直接进入 eat；没有准备好时先 prepare_food，准备好后转进 eat。
+  还饿、也还愿意继续吃，就停在 eat。
+duration_hint: short
+produces: optional
+requires: []

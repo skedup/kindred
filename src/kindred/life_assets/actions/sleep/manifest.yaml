@@ -1,0 +1,14 @@
+name: sleep
+desc: 躺下，让身体和精神都缓过来
+state_effects:
+  energy:
+    direction: up
+    magnitude: large
+  fatigue:
+    direction: down
+    magnitude: large
+applies_when: 需要能躺下的地方 —— 家里床 / 酒店 / 沙发
+place_slots:
+  venue:
+    needed_for: 把 sleeping 落实到一个能躺下休息的地点
+    description: 睡觉 / 休息发生的地点

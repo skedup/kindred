@@ -1,0 +1,55 @@
+name: dine_out
+description: 肚子饿了或忽然馋起一口具体的味道，想认真出门吃顿好的；天气影响出行方式，但不默认否决这份兴致
+location_bindings:
+  meal_place:
+    query: 适合这次外出用餐的地方
+    categories:
+      - food
+    radius_min_km: 0
+    radius_max_km: 3
+    limit: 5
+uses:
+  - action: change_outfit
+    intent: 看看自己的衣柜，按这次想去吃饭的心情换一身合适的穿着
+  - action: makeup
+    intent: 出门前对镜精心打扮，带着赴约的期待
+  - action: pack_bag
+    intent: 整理这次出门需要或只是想随身带着的包和物品
+  - action: walk
+    intent: 走向那家心仪的店，一路上带着期待
+    bind_places:
+      destination: meal_place
+    state_effects:
+      energy:
+        direction: down
+        magnitude: medium
+      fatigue:
+        direction: up
+        magnitude: medium
+  - action: ride
+    intent: 距离、天气或体力更适合乘车时，坐车前往那家心仪的店
+    bind_places:
+      destination: meal_place
+    state_effects:
+      energy:
+        direction: down
+        magnitude: medium
+      fatigue:
+        direction: up
+        magnitude: medium
+  - action: eat
+    intent: 坐下享用，发现新味道、这顿有故事
+    bind_places:
+      venue: meal_place
+    state_effects:
+      stimulation:
+        direction: up
+        magnitude: medium
+terminal_when: |
+  完成：在 eat 状态下吃满意了、或 hunger 降下来了，end_activity。
+  中断：情况变了就不必硬撑——不饿了（hunger 本就低）、累得走不动（energy 见底）、或不想继续了，
+  那这顿没吃成也是一种结束，照样 end_activity，settle 里如实说没吃成。不合时宜了，中断它就是对的决定。
+  只有没吃够、还想坐会儿，才停在 eat 继续。
+duration_hint: long
+produces: likely
+requires: []

@@ -1,0 +1,15 @@
+{#
+  dream Step 1.summarize 的 user prompt 模板。
+  数据加工（window → role+text 行）在 _render_summarize_prompt 算好传入。
+
+  渲染上下文：
+  - dream_date: str    昨日日期
+  - messages_block: str  已拼好的 messages 文本（无可读消息时为占位句）
+#}
+昨日日期：{{ dream_date }}
+
+以下是昨日的 messages（role + 文本），请按四类输出 markdown 摘要：
+
+<messages>
+{{ messages_block }}
+</messages>

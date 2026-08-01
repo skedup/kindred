@@ -1,0 +1,13 @@
+name: reach_out_to_user
+description: 对方不在身边、彼此没有刚聊过，而生活里正有一件具体的事，很自然地想告诉 ta
+uses:
+  - action: compose
+    intent: 从刚经历的活动、观察或想法里，酝酿一句此刻真想和 ta 分享的话
+  - action: send
+    intent: 决定了，把话发出去，主动联系 ta
+terminal_when: |
+  话发出去了（send 完成），这个意图就完成了，可以 end_activity。
+  还在 compose 犹豫、或想了又咽回去，就停在 compose（不发）。
+duration_hint: short
+produces: optional
+requires: []

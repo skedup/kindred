@@ -1,0 +1,7 @@
+name: makeup
+desc: 对着镜子上妆或改变当前妆容，并留下具体的妆后状态
+state_effects:
+  aesthetic:
+    direction: up
+    magnitude: medium
+applies_when: 能拿到化妆工具，而且确实要把妆容改变为一个非空的具体状态；维持原样时跳过

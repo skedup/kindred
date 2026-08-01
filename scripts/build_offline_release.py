@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import email
+import gzip
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import zipfile
+from pathlib import Path
+from typing import Any
+
+
+class ReleaseBuildError(RuntimeError):
+    pass
+
+
+def _sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _load_inputs(root: Path) -> dict[str, Any]:
+    try:
+        value = json.loads((root / "distribution/release-inputs.json").read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseBuildError("release inputs are unreadable") from exc
+    if value.get("schema_version") != 1 or value.get("release_version") != "0.1.0":
+        raise ReleaseBuildError("release inputs have an unsupported schema or version")
+    return value
+
+
+def _verify(path: Path, *, size: int | None = None, digest: str) -> None:
+    if (
+        not path.is_file()
+        or path.is_symlink()
+        or (size is not None and path.stat().st_size != size)
+        or _sha256(path) != digest
+    ):
+        raise ReleaseBuildError("frozen input identity mismatch")
+
+
+def _run(argv: list[str], *, cwd: Path) -> str:
+    try:
+        result = subprocess.run(argv, cwd=cwd, check=True, capture_output=True, text=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ReleaseBuildError("release build command failed") from exc
+    return result.stdout.strip()
+
+
+def _build_first_party(root: Path, target: Path, inputs: dict[str, Any]) -> list[Path]:
+    tools = inputs["build_tools"]
+    target.mkdir(parents=True)
+    actual = {
+        "node": _run(["node", "--version"], cwd=root).removeprefix("v"),
+        "pnpm": _run(["pnpm", "--version"], cwd=root),
+        "uv": _run(["uv", "--version"], cwd=root).split()[1],
+    }
+    if any(actual[name] != tools[name] for name in actual):
+        raise ReleaseBuildError("release build tool identity mismatch")
+    if _sha256(root / "web/pnpm-lock.yaml") != tools["pnpm_lock_sha256"]:
+        raise ReleaseBuildError("Web lockfile identity mismatch")
+    _run([sys.executable, "scripts/build_web.py", "build"], cwd=root)
+    for _name, _version, rel, _filename, _digest in inputs["first_party"]:
+        _run(["uv", "build", "--wheel", "--out-dir", str(target), rel], cwd=root)
+    wheels = sorted(target.glob("*.whl"))
+    expected = {item[3]: item[4] for item in inputs["first_party"]}
+    if {wheel.name for wheel in wheels} != expected.keys():
+        raise ReleaseBuildError("first-party wheel set is incomplete")
+    for wheel in wheels:
+        _verify(wheel, digest=expected[wheel.name])
+    return wheels
+
+
+def _wheel_record(path: Path, group: str, licenses: dict[str, str]) -> dict[str, Any]:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            metadata = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+            if len(metadata) != 1:
+                raise ValueError
+            message = email.message_from_bytes(archive.read(metadata[0]))
+        name = str(message["Name"])
+        version = str(message["Version"])
+        normalized = re.sub(r"[-_.]+", "-", name).lower()
+        fallback = "Apache-2.0" if normalized.startswith("kindred") else ""
+        license_id = licenses.get(normalized, fallback)
+        if not name or not version or not license_id:
+            raise ValueError
+    except (OSError, KeyError, TypeError, ValueError, zipfile.BadZipFile) as exc:
+        raise ReleaseBuildError("wheel metadata or license is incomplete") from exc
+    return {
+        "distribution": name,
+        "version": version,
+        "filename": path.name,
+        "size": path.stat().st_size,
+        "sha256": _sha256(path),
+        "group": group,
+        "license": license_id,
+    }
+
+
+def _tar_bundle(source: Path, destination: Path) -> None:
+    with destination.open("wb") as output:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w", dereference=True) as archive:
+                for path in sorted(source.rglob("*")):
+                    info = archive.gettarinfo(path, path.relative_to(source).as_posix())
+                    info.uid = info.gid = info.mtime = 0
+                    info.uname = info.gname = ""
+                    if info.isfile():
+                        with path.open("rb") as stream:
+                            archive.addfile(info, stream)
+                    else:
+                        archive.addfile(info)
+
+
+def _plugin_checksum(root: Path) -> str:
+    digest = hashlib.sha256()
+    plugin = root / "src/kindred/openclaw/mouth_plugin"
+    for name in ("binding.js", "index.js", "openclaw.plugin.json", "package.json"):
+        digest.update(name.encode() + b"\0" + (plugin / name).read_bytes())
+    return digest.hexdigest()
+
+
+def _notices(inputs: dict[str, Any], wheels: list[dict[str, Any]]) -> str:
+    rows = {(item["distribution"], item["version"], item["license"]) for item in wheels}
+    rows.update(tuple(item) for item in inputs["web_runtime"])
+    packages = "".join(
+        f"{name} {version} | {license_id}\n" for name, version, license_id in sorted(rows)
+    )
+    header = """Kindred third-party notices
+
+CPython 3.11.15 | PSF-2.0 | https://www.python.org/
+python-build-standalone 20260728 | MPL-2.0 | https://github.com/astral-sh/python-build-standalone/tree/20260728
+
+Dependencies
+"""
+    return header + packages
+
+
+def _spdx_package(
+    name: str,
+    spdx_id: str,
+    version: str,
+    license_id: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "SPDXID": spdx_id,
+        "versionInfo": version,
+        "downloadLocation": extra.pop("source", "NOASSERTION"),
+        "filesAnalyzed": False,
+        "licenseConcluded": license_id,
+        "licenseDeclared": license_id,
+        **extra,
+    }
+
+
+def _sbom(inputs: dict[str, Any], platforms: dict[str, Any]) -> dict[str, Any]:
+    packages = []
+    for platform, data in platforms.items():
+        for name, version, license_id in (
+            ("CPython", data["python"]["version"], "PSF-2.0"),
+            ("python-build-standalone", data["python"]["build"], "MPL-2.0"),
+        ):
+            packages.append(
+                _spdx_package(
+                    f"{name}-{platform}",
+                    f"SPDXRef-{name}-{platform}",
+                    version,
+                    license_id,
+                    source=data["python"]["source"],
+                    checksums=[{"algorithm": "SHA256", "checksumValue": data["python"]["sha256"]}],
+                )
+            )
+        packages.extend(
+            _spdx_package(
+                wheel["distribution"],
+                f"SPDXRef-wheel-{platform}-{index}",
+                wheel["version"],
+                wheel["license"],
+                checksums=[{"algorithm": "SHA256", "checksumValue": wheel["sha256"]}],
+            )
+            for index, wheel in enumerate(data["wheels"])
+        )
+    packages.extend(
+        _spdx_package(name, f"SPDXRef-web-{index}", version, license_id)
+        for index, (name, version, license_id) in enumerate(inputs["web_runtime"])
+    )
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": f"kindred-{inputs['release_version']}-offline-bundles",
+        "documentNamespace": f"https://kindred.invalid/spdx/{inputs['release_version']}",
+        "creationInfo": {
+            "created": "1970-01-01T00:00:00Z",
+            "creators": ["Tool: Kindred release builder"],
+        },
+        "packages": packages,
+    }
+
+
+def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
+    if (root / ".git").exists() or not output.is_dir() or any(output.iterdir()):
+        raise ReleaseBuildError("build requires a clean export and an empty output directory")
+    inputs = _load_inputs(root)
+    licenses = inputs["licenses"]
+    for kind, expected in (("actions", 13), ("activities", 7)):
+        assets = root / "src/kindred/life_assets" / kind
+        count = sum((path / "manifest.yaml").is_file() for path in assets.iterdir())
+        if count != expected:
+            raise ReleaseBuildError("public life asset count mismatch")
+    with tempfile.TemporaryDirectory(prefix="kindred-release-") as temporary:
+        temp = Path(temporary)
+        first_party = _build_first_party(root, temp / "first-party", inputs)
+        platform_manifest: dict[str, Any] = {}
+        all_wheels: list[dict[str, Any]] = []
+        for platform, platform_input in inputs["platforms"].items():
+            python_version, build, filename, size, digest, source = platform_input["python"]
+            python_archive = cache / "python" / filename
+            _verify(python_archive, size=size, digest=digest)
+            frozen = inputs["wheels"]["common"] + inputs["wheels"][platform]
+            stage = temp / platform
+            wheelhouse = stage / "wheelhouse"
+            wheelhouse.mkdir(parents=True)
+            records: list[dict[str, Any]] = []
+            for distribution, version, wheel_name, wheel_hash, group in frozen:
+                source_wheel = cache / "wheels" / platform / wheel_name
+                _verify(source_wheel, digest=wheel_hash)
+                shutil.copy2(source_wheel, wheelhouse / wheel_name)
+                record = _wheel_record(source_wheel, group, licenses)
+                if (record["distribution"].lower().replace("_", "-"), record["version"]) != (
+                    distribution,
+                    version,
+                ):
+                    raise ReleaseBuildError("frozen wheel metadata mismatch")
+                records.append(record)
+            for wheel in first_party:
+                shutil.copy2(wheel, wheelhouse / wheel.name)
+                records.append(_wheel_record(wheel, "base", licenses))
+            shutil.copy2(python_archive, stage / "python-runtime.tar.gz")
+            bundle_name = f"kindred-v{inputs['release_version']}-{platform}.tar.gz"
+            bundle = output / bundle_name
+            _tar_bundle(stage, bundle)
+            platform_manifest[platform] = {
+                **{key: platform_input[key] for key in ("os", "arch", "minimum_os")},
+                "python": {
+                    "version": python_version,
+                    "build": build,
+                    "source": source,
+                    "license": "PSF-2.0",
+                    "distributor_license": "MPL-2.0",
+                    "size": size,
+                    "sha256": digest,
+                },
+                "bundle": {
+                    "filename": bundle_name,
+                    "size": bundle.stat().st_size,
+                    "sha256": _sha256(bundle),
+                },
+                "wheels": records,
+            }
+            all_wheels.extend(records)
+        web = json.loads((root / "src/kindred/web/static/kindred-web-build.json").read_text())
+        manifest = {
+            "schema_version": 1,
+            "release_version": inputs["release_version"],
+            "openclaw": inputs["openclaw"],
+            "build_tools": inputs["build_tools"],
+            "life_assets": {"actions": 13, "activities": 7},
+            "mouth_plugin": {"version": "0.1.0", "sha256": _plugin_checksum(root)},
+            "web": {"included": True, "build": web},
+            "draw": {"included": True, "enabled_by_default": False},
+            "install_skill": {
+                "included": True,
+                "sha256": _sha256(root / "src/kindred/openclaw/install_skill/SKILL.md"),
+            },
+            "platforms": platform_manifest,
+        }
+        (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        (output / "THIRD_PARTY-NOTICES.txt").write_text(_notices(inputs, all_wheels))
+        (output / "SBOM.spdx.json").write_text(
+            json.dumps(_sbom(inputs, platform_manifest), indent=2, sort_keys=True) + "\n"
+        )
+        shutil.copy2(root / "scripts/install.sh", output / "install.sh")
+        assets = sorted(path for path in output.iterdir() if path.name != "SHA256SUMS")
+        checksums = "".join(f"{_sha256(path)}  {path.name}\n" for path in assets)
+        (output / "SHA256SUMS").write_text(checksums)
+    _run(
+        [sys.executable, str(root / "scripts/public_release.py"), "--repo", str(root), "scan"]
+        + ["--trusted-inputs", str(root / "distribution/release-inputs.json"), str(output)],
+        cwd=root,
+    )
+    return manifest
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--clean-root", type=Path, required=True)
+    parser.add_argument("--input-cache", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        manifest = build_release(
+            args.clean_root.resolve(), args.input_cache.resolve(), args.output.resolve()
+        )
+    except (OSError, ReleaseBuildError) as exc:
+        print(json.dumps({"status": "failed", "reason": str(exc)}))
+        return 2
+    print(json.dumps({"status": "ok", "platforms": sorted(manifest["platforms"])}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

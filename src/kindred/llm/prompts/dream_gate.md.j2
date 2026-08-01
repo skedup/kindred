@@ -1,0 +1,11 @@
+{#
+  dream Step 4.gate 的 user prompt 模板。
+  changes 列表的逐条渲染（含 0-based 索引）在 _render_gate_prompt 算好传入。
+
+  渲染上下文：
+  - changes_block: str   已拼好的 changes 文本（每条 file/operation/section/content）
+#}
+【待检查的 changes（0-based 索引）】
+{{ changes_block }}
+
+按上述规则逐条检查，给出 verdict + blocked/warnings 索引。

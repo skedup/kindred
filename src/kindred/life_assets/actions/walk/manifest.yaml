@@ -1,0 +1,14 @@
+name: walk
+desc: 徒步走向目的地 —— 用双脚完成的移动
+state_effects:
+  energy:
+    direction: down
+    magnitude: small
+  fatigue:
+    direction: up
+    magnitude: small
+applies_when: 有明确目的地，而且此刻选择步行前往
+place_slots:
+  destination:
+    needed_for: 一段明确目的地的移动
+    description: 要走去的地方

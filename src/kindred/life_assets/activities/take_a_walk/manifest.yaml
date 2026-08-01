@@ -1,0 +1,29 @@
+name: take_a_walk
+description: 在室内待久了、眼前有些单调，想去附近走走，换一点新鲜空气；天气影响出行方式，但不默认否决这件事
+location_bindings:
+  walk_place:
+    query: 附近适合随意散步、走到后可以停下的公园、步道、街区或公共空间
+    categories: [park, pedestrian_area, public_square, scenic_spot]
+    radius_min_km: 0.2
+    radius_max_km: 5
+    limit: 5
+uses:
+  - action: change_outfit
+    intent: 只有当前位于 home、能拿到自己的衣柜且穿着不适合天气或这次散步时，换一身舒服的
+  - action: makeup
+    intent: 只有当前位于 home、手边有化妆用品且确实想带着妆出门时，才上妆或补妆
+  - action: pack_bag
+    intent: 只有当前位于 home、能拿到自己的包且这次散步需要或只是想换包、带些东西时，整理好再出门
+  - action: walk
+    intent: 朝附近真实可到达的落点走一段，路程本身就是这次体验
+    state_effects:
+      stimulation: {direction: up, magnitude: small}
+    bind_places:
+      destination: walk_place
+terminal_when: |
+  已经真实到达选择的落点，并且走够、身体松下来或体力不再适合继续时，就 end_activity。
+  任意阶段若查不到真实落点、天气明确危险、现实不可行或临时不想出门，也可以如实 end_activity，
+  不要虚构移动或到达。
+duration_hint: short
+produces: optional
+requires: []

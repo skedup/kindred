@@ -1,0 +1,9 @@
+name: compose
+desc: 心里有句话或一段文字，正想着怎么写出来
+state_effects:
+  clarity:
+    direction: up
+    magnitude: small
+applies_when: 任何时候都能开始 —— 酝酿一句话不需要前提
+capabilities:
+  - compose

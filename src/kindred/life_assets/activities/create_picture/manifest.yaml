@@ -1,0 +1,10 @@
+name: create_picture
+description: 脑海里浮现出一幅具体画面，想把它安静地画下来
+uses:
+  - action: draw
+    intent: 把已经成形的视觉构思生成一张本地作品
+terminal_when: |
+  图片已经生成，或构思散去、能力暂时不可用而决定收住时，就 end_activity。
+duration_hint: short
+produces: optional
+requires: []

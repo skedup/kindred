@@ -1,0 +1,12 @@
+name: send
+desc: 把话发出去，主动联系 ta
+state_effects:
+  social:
+    direction: up
+    magnitude: medium
+  comfort:
+    direction: up
+    magnitude: small
+applies_when: 有想说的话、且决定要发 —— 配合 send_to_user 工具调用
+capabilities:
+  - send

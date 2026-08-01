@@ -1,0 +1,127 @@
+paths:
+  life_root: life
+  # 进程态目录（docs/16 §2.3）：pid + daemon.log，重启即重生，不随搬家。
+  run_dir: "{life_root}/run"
+  db: "{life_root}/data/kindred.db"
+  context_bundle: "{life_root}/state/context-bundle.md"
+  soul_excerpt: "{life_root}/data/soul/SOUL_excerpt.md"
+  # 灵魂三件套全落 life_root 根（docs/16 §2.1）——人类直接可读可编辑。
+  soul_full: "{life_root}/SOUL.md"
+  identity: "{life_root}/IDENTITY.md"
+  user: "{life_root}/USER.md"
+  # 运行期 character-card：实例级设置（如 home）放这里；不进入 8 层 state。
+  character_card: "{life_root}/character-card.yaml"
+  bundle_highlights: "{life_root}/data/soul/bundle_highlights.md"
+  debug_dump_dir: "{life_root}/debug"
+  # 做梦落地（D6.6）：snapshot 存档与可改 soul/ 隔离（docs §7.2）；梦日记人类可读。
+  # 梦日记落 soul-history/snapshots/<ts>/dream-<date>.md，无独立 dreams_dir（docs/16 §2.2）。
+  soul_history_dir: "{life_root}/data/soul-history"
+  # Host-owned Artifact 根；Portable producer 只能暂存 bundle，最终提交与引用由 Host 负责。
+  # 与 dream 的 gated 灵魂写入分开。
+  doc_dir: "{life_root}/doc"
+
+llm:
+  model: gemini-2.5-flash
+  # LLM 后端。凭据只从 Kindred secrets/env 注入，不读取 OpenClaw 配置。
+  # provider: claude_code | anthropic | google | deepseek | openai
+  # provider=claude_code / anthropic 时把 model 配成 Claude 模型（如 claude-haiku-4-5 / claude-opus-4-8）；
+  # claude_code 机器需 claude auth login，anthropic 经 env ANTHROPIC_API_KEY 注入（可选 ANTHROPIC_BASE_URL）。
+  # provider=google 时把 model 配成 gemini 模型（如 gemini-3.5-flash），经 env GEMINI_API_KEY 注入（可选 GEMINI_BASE_URL）。
+  # provider=deepseek 时默认可用 deepseek-v4-flash，经 env DEEPSEEK_API_KEY 注入（可选 DEEPSEEK_BASE_URL）。
+  # provider=openai 时把 model 配成 OpenAI 模型，经 env OPENAI_API_KEY 注入（可选 OPENAI_BASE_URL，默认含 /v1）。
+  provider: google
+  # provider=claude_code 单次 claude -p 子进程超时（秒）。心每 tick 起一个 claude 子进程
+  # （冷启+模型延迟本就慢），心嘴并发各起子进程共用订阅时单次可超 120s；放宽到 300s。
+  # 仅 claude_code 使用；HTTP Provider 使用各自客户端的超时。
+  claude_code_timeout_s: 300
+
+logging:
+  level: WARNING
+  # daemon.log 单文件上限与历史文件数量；避免长期 DEBUG 观测吃满磁盘。
+  file_max_bytes: 10485760
+  file_backup_count: 5
+
+debug:
+  dump_enabled: false
+  # 只保留最近的逐 tick debug dump；不会清理 debug 目录中的其他文件。
+  dump_max_files: 200
+
+daemon:
+  # daemon 监听 partner 消息的 main session（docs/13 §8.3 sessionKey 约定）。
+  # 部署时按真实 session 覆盖，例如 agent:main:wecom:direct:<id>。
+  session_key: "agent:main:local:default"
+  # 进程态文件（docs/16 §2.3），派生自 run_dir。pid 防重复启动 + kindred stop 用；
+  # log_file 是常驻后唯一诊断入口（FileHandler）。
+  pid_file: "{run_dir}/kindred.pid"
+  log_file: "{run_dir}/daemon.log"
+
+gateway:
+  # OpenClaw Gateway WebSocket，daemon 用它拉 chat.history 同步对话进表（earlier milestone）。
+  host: "127.0.0.1"
+  port: 23001
+  # token 是 secret，默认空；务必经 env KINDRED_GATEWAY_TOKEN 或显式 override 注入，
+  # 不要写进 YAML（避免凭据落盘）。
+  token: ""
+
+# OPEN3-B installer 会把已验证的 transcript/peer/route 写入私有 XDG config。
+# 未接线时保持空表，Gateway history 与 outbound 都 fail-closed。
+openclaw: {}
+
+web:
+  # 私密层（bra/panties/socks）。该值 = 本实例「亲密度够」标志（docs/02 §401
+  # 关系深度控制）。显明文三态：显 = ?reveal=1（右上角揭示开关）OR 该值为 true。
+  # 默认 false = 陌生人实例；亲密关系的实例设 true。CSS hover 不是隐私边界。
+  reveal_intimate: false
+
+world:
+  # 世界系统（Provider 层）——「能呼吸的世界」。
+  # 见 docs/discussions/2026-06-29-breathable-world-event-provider.md §7 + src/kindred/providers。
+  #   location_provider: none（默认关闭） | virtual（纯虚拟、无网络、显式 opt-in）
+  #                      | baidu（百度地图 Place API，GCJ-02；凭据走 env BAIDU_MAP_AK
+  #                      [+ SN 校验型应用的 BAIDU_MAP_SK]；查询失败不降级 virtual，
+  #                      由 act prompt 按「查询失败」降级）。
+  #   weather_provider: virtual（纯虚拟、无网络、默认） | wttr（wttr.in 真实天气，免 key，
+  #                     失败自动降级回 virtual）。
+  #   weather_ttl_minutes: 天气缓存 TTL（分钟）；sense_io 按 environment.weather_cached_at
+  #                        比对触发时刻，过期才调 Provider（pull + in-tick TTL）。
+  #   weather_timeout_s: 真实 Provider 单次拉取超时（秒），慢 I/O 不拖住 tick。
+  #   weather_location: 精确查询位置（如 shenzhen+nanshan 到区）；留空回落到 ta 的 city。
+  location_provider: none
+  weather_provider: virtual
+  weather_ttl_minutes: 60
+  weather_timeout_s: 5
+  weather_location: ""
+  #   timezone: ta 所在世界的时区（IANA 名）。CLI/daemon 据此生成 life clock——她的时间
+  #             = 她世界的时间，不靠宿主 TZ（治「跑在 UTC 上 → triggered_at/phase 差 8 小时」）。
+  timezone: "Asia/Shanghai"
+
+resident:
+  install_id: ""
+  resident_id: ""
+  agent_id: ""
+  workspace: ""
+  marker_path: ""
+  secrets_file: ""
+
+capabilities:
+  draw:
+    enabled: false
+    side_effect_activities: []
+    settings: {}
+  compose:
+    enabled: true
+    side_effect_activities: []
+    settings: {}
+  inventory:
+    enabled: true
+    side_effect_activities: []
+    settings: {}
+  send:
+    # C2b：send_to_user 是 external_side_effect；默认只授权真实声明 send action 的
+    # reach_out_to_user，避免其它 activity 凭空获得外投能力。
+    # 如需关闭该默认授权，必须显式配置 side_effect_activities: []；
+    # capabilities: {} 或 send: {} 会与默认值深合并，不会清空这条白名单。
+    enabled: true
+    side_effect_activities:
+      - reach_out_to_user
+    settings: {}
