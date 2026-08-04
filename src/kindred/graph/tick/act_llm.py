@@ -397,6 +397,14 @@ def _t2_act_llm_impl(
             decision_reason_raw.strip() if isinstance(decision_reason_raw, str) else ""
         ),
         sense_note=sense_note_raw.strip() if isinstance(sense_note_raw, str) else "",
+        current_engagement=(
+            float(current_activity["engagement"])
+            if current_activity is not None
+            and isinstance(current_activity.get("engagement"), (int, float))
+            and not isinstance(current_activity.get("engagement"), bool)
+            and 0 <= current_activity["engagement"] <= 1
+            else None
+        ),
     )
     prompt = render_act_prompt(prompt_context)
 

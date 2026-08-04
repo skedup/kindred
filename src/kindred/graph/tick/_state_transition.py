@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from kindred.activity import ActivitySkillError, load_activity_skill
+from kindred.activity import ActivitySkillError, load_activity_skill, resolve_step_effects
 from kindred.activity.action import load_atomic_action
 from kindred.activity.skill import MAGNITUDE_RANGE, StateEffect
 from kindred.graph.tick._act_contract import (
@@ -29,8 +29,7 @@ _LAYER_KEYS: dict[str, frozenset[str]] = {
     "needs": frozenset(Needs.model_fields),
     "affect": frozenset(Affect.model_fields),
 }
-_DIRECTIONS = frozenset({"up", "down"})
-_CONTEXT_DELTA = 6
+_CONTEXT_DELTA_RANGE = (3, 10)
 _T2_MERGE_LAYERS: dict[str, type[BaseModel]] = {
     "embodiment": Embodiment,
     "bag": Bag,
@@ -50,6 +49,13 @@ class StateTransitionResult:
     current_state: str | None
     activity_touched: bool
     with_whom_explicit: bool
+
+
+@dataclass(frozen=True)
+class _ActionPolicy:
+    action_step: str
+    is_entry: bool
+    effects: dict[str, StateEffect]
 
 
 @dataclass(frozen=True)
@@ -326,7 +332,7 @@ def _apply_host_owned_interior(
     activities_dir: Path,
     actions_dir: Path,
 ) -> bool:
-    """先落 Action 确定性 effect，再落最多两项情境方向。"""
+    """先落 entry Action effect/override，再落最多两项情境 delta。"""
     interior = next_state.get("interior")
     if not isinstance(interior, dict):
         raise ActLlmContractError(
@@ -334,14 +340,56 @@ def _apply_host_owned_interior(
         )
 
     contextual = {
-        "needs": _validate_contextual_directions("needs", needs_diff),
-        "affect": _validate_contextual_directions("affect", affect_diff),
+        "needs": _validate_signed_deltas("needs", needs_diff),
+        "affect": _validate_signed_deltas("affect", affect_diff),
     }
+
+    proposed_keys = {key for layer_diff in contextual.values() for key in layer_diff}
+    if (
+        current_state is None
+        and not proposed_keys
+        and kind in {"start_activity", "advance_activity"}
+    ):
+        # 生产路径已由 resolve_effective_action 强制解析；保留无 Action 的窄投影单测接缝。
+        return False
+    policy = _resolve_action_policy(
+        next_state,
+        target=target,
+        kind=kind,
+        current_state=current_state,
+        activities_dir=activities_dir,
+        actions_dir=actions_dir,
+    )
+
+    overrides: dict[str, int] = {}
+    if policy.is_entry:
+        for key, effect in policy.effects.items():
+            layer = _layer_for_key(key)
+            if key not in contextual[layer]:
+                continue
+            delta = contextual[layer].pop(key)
+            _validate_declared_override(layer, key, delta, effect)
+            overrides[key] = delta
+    else:
+        overlap = proposed_keys.intersection(policy.effects)
+        if overlap:
+            raise ActLlmContractError(
+                "T2.act.llm: same-step/end 不得重提已结算 Action effect，"
+                f"invalid_paths={sorted(_effect_path(key) for key in overlap)}"
+            )
+
     contextual_keys = {key for layer_diff in contextual.values() for key in layer_diff}
     if len(contextual_keys) > 2:
         raise ActLlmContractError(
-            "T2.act.llm: needs/affect 情境调整合计最多两项，invalid_paths=['needs','affect']"
+            "T2.act.llm: needs/affect 情境 delta 合计最多两项，invalid_paths=['needs','affect']"
         )
+    for layer, layer_diff in contextual.items():
+        for key, delta in layer_diff.items():
+            if not _CONTEXT_DELTA_RANGE[0] <= abs(delta) <= _CONTEXT_DELTA_RANGE[1]:
+                raise ActLlmContractError(
+                    "T2.act.llm: contextual delta 绝对值必须在 3..10，"
+                    f"invalid_paths=['{layer}.{key}']"
+                )
     for key in sorted(affect_event_touched.intersection(contextual["affect"])):
         contextual["affect"].pop(key)
         _warn_state_diff_rejected(
@@ -350,58 +398,86 @@ def _apply_host_owned_interior(
         )
     contextual_keys = {key for layer_diff in contextual.values() for key in layer_diff}
 
-    state_effects: dict[str, StateEffect] = {}
-    if kind in {"start_activity", "advance_activity"}:
-        if not isinstance(target, str) or not target.strip():
-            raise ActLlmContractError("T2.act.llm: committed start/advance 缺合法 target_activity")
-        if current_state is None and not contextual_keys:
-            # 生产 start/advance 在进入本对象前已由 resolve_effective_action 强制解析；
-            # None 仅供本模块的非 Action 层投影测试，不代表 committed proposal 可省略 step。
-            return False
-        if not isinstance(current_state, str) or not current_state.strip():
-            raise ActLlmContractError("T2.act.llm: committed start/advance 缺合法 current_state")
-        try:
-            skill = load_activity_skill(
-                target,
-                activities_dir=activities_dir,
-                actions_dir=actions_dir,
-            )
-            uses = [use for use in skill.uses if use.action == current_state]
-            if len(uses) != 1:
-                raise ActLlmContractError(
-                    "T2.act.llm: current_state 必须唯一匹配当前 activity uses，"
-                    "invalid_paths=['current_state']"
-                )
-            action = load_atomic_action(current_state, actions_dir=actions_dir)
-        except ActivitySkillError:
-            raise ActLlmContractError(
-                "T2.act.llm: 无法解析当前 activity/action package，"
-                "invalid_paths=['target_activity','current_state']"
-            ) from None
-        state_effects = dict(action.state_effects)
-        state_effects.update(uses[0].state_effects)
-    elif kind != "end_activity":
-        raise ActLlmContractError("T2.act.llm: committed proposal 的 kind 非法")
-
-    overlap = contextual_keys.intersection(state_effects)
-    if overlap:
-        raise ActLlmContractError(
-            "T2.act.llm: 情境调整不得重复当前 Action effect，"
-            f"invalid_paths={sorted(_effect_path(key) for key in overlap)}"
-        )
-
-    for key, effect in state_effects.items():
-        _apply_delta(interior, key, effect.direction, _magnitude_midpoint(effect.magnitude))
+    if policy.is_entry:
+        for key, effect in policy.effects.items():
+            delta = overrides.get(key, _signed_effect_midpoint(effect))
+            _apply_signed_delta(interior, key, delta)
     for layer, layer_diff in contextual.items():
-        for key, direction in layer_diff.items():
-            _apply_delta(interior, key, direction, _CONTEXT_DELTA, expected_layer=layer)
+        for key, delta in layer_diff.items():
+            _apply_signed_delta(interior, key, delta, expected_layer=layer)
 
     logger.debug(
-        "T2.act.llm state_authority action_effect_keys=%s contextual_keys=%s",
-        sorted(state_effects),
+        "T2.act.llm state_authority action_entry=%s action_step=%s "
+        "effect_keys=%s override_keys=%s contextual_keys=%s",
+        policy.is_entry,
+        policy.action_step,
+        sorted(policy.effects),
+        sorted(overrides),
         sorted(contextual_keys),
     )
-    return bool(state_effects or contextual_keys)
+    return bool((policy.is_entry and policy.effects) or contextual_keys)
+
+
+def _resolve_action_policy(
+    next_state: dict[str, Any],
+    *,
+    target: Any,
+    kind: Any,
+    current_state: Any,
+    activities_dir: Path,
+    actions_dir: Path,
+) -> _ActionPolicy:
+    if kind not in {"start_activity", "advance_activity", "end_activity"}:
+        raise ActLlmContractError("T2.act.llm: committed proposal 的 kind 非法")
+    if not isinstance(target, str) or not target.strip():
+        raise ActLlmContractError("T2.act.llm: committed proposal 缺合法 target_activity")
+
+    existing = next_state.get("activity")
+    if kind == "start_activity":
+        action_step = current_state
+        is_entry = True
+    else:
+        if not isinstance(existing, dict) or existing.get("name") != target:
+            raise ActLlmContractError(
+                "T2.act.llm: prior activity 与 target_activity 冲突，"
+                "invalid_paths=['target_activity']"
+            )
+        prior_step = existing.get("step")
+        if not isinstance(prior_step, str) or not prior_step.strip() or prior_step == SETTLE_STEP:
+            raise ActLlmContractError(
+                "T2.act.llm: prior activity.step 无法解析，invalid_paths=['activity.step']"
+            )
+        action_step = prior_step if kind == "end_activity" else current_state
+        is_entry = kind == "advance_activity" and action_step != prior_step
+
+    if not isinstance(action_step, str) or not action_step.strip() or action_step == SETTLE_STEP:
+        raise ActLlmContractError("T2.act.llm: committed proposal 缺合法 current_state")
+    try:
+        skill = load_activity_skill(
+            target,
+            activities_dir=activities_dir,
+            actions_dir=actions_dir,
+        )
+        if kind == "advance_activity" and isinstance(prior_step, str) and prior_step != action_step:
+            if sum(use.action == prior_step for use in skill.uses) != 1:
+                raise ActLlmContractError(
+                    "T2.act.llm: prior activity.step 不属于当前 activity uses，"
+                    "invalid_paths=['activity.step']"
+                )
+            load_atomic_action(prior_step, actions_dir=actions_dir)
+        uses = [use for use in skill.uses if use.action == action_step]
+        if len(uses) != 1:
+            raise ActLlmContractError(
+                "T2.act.llm: Action 必须唯一匹配当前 activity uses，invalid_paths=['current_state']"
+            )
+        load_atomic_action(action_step, actions_dir=actions_dir)
+        effects = resolve_step_effects(skill, action_step, actions_dir=actions_dir)
+    except ActivitySkillError:
+        raise ActLlmContractError(
+            "T2.act.llm: 无法解析当前 activity/action package，"
+            "invalid_paths=['target_activity','current_state']"
+        ) from None
+    return _ActionPolicy(action_step=action_step, is_entry=is_entry, effects=effects)
 
 
 def _validate_affect_event_touched(value: Any) -> frozenset[str]:
@@ -414,7 +490,7 @@ def _validate_affect_event_touched(value: Any) -> frozenset[str]:
     return frozenset(value)
 
 
-def _validate_contextual_directions(layer: str, layer_diff: Any) -> dict[str, str]:
+def _validate_signed_deltas(layer: str, layer_diff: Any) -> dict[str, int]:
     if layer_diff is None:
         return {}
     if not isinstance(layer_diff, dict):
@@ -423,26 +499,40 @@ def _validate_contextual_directions(layer: str, layer_diff: Any) -> dict[str, st
             f"got {type(layer_diff).__name__}"
         )
     allowed = _LAYER_KEYS[layer]
-    normalized: dict[str, str] = {}
-    for key, direction in layer_diff.items():
+    normalized: dict[str, int] = {}
+    for key, delta in layer_diff.items():
         if key not in allowed:
             raise ActLlmContractError(
                 f"T2.act.llm: final_state_diff.{layer} 包含未知字段，"
                 f"invalid_paths=['{safe_state_path(f'{layer}.{key}')}']"
             )
-        if not isinstance(direction, str) or direction not in _DIRECTIONS:
+        if type(delta) is not int or delta == 0:
             raise ActLlmContractError(
-                f"T2.act.llm: final_state_diff.{layer}.{key} 只接受 strict up/down，"
-                f"got {type(direction).__name__}"
+                f"T2.act.llm: final_state_diff.{layer}.{key} 只接受 nonzero strict int delta，"
+                f"got {type(delta).__name__}"
             )
-        normalized[key] = direction
+        normalized[key] = delta
     return normalized
 
 
-def _apply_delta(
+def _validate_declared_override(
+    layer: str,
+    key: str,
+    delta: int,
+    effect: StateEffect,
+) -> None:
+    sign_matches = (delta > 0) == (effect.direction == "up")
+    low, high = MAGNITUDE_RANGE[effect.magnitude]
+    if not sign_matches or not low <= abs(delta) <= high:
+        raise ActLlmContractError(
+            "T2.act.llm: declared override 必须符合 Action direction/magnitude，"
+            f"invalid_paths=['{layer}.{key}']"
+        )
+
+
+def _apply_signed_delta(
     interior: dict[str, Any],
     key: str,
-    direction: str,
     delta: int,
     *,
     expected_layer: str | None = None,
@@ -459,18 +549,21 @@ def _apply_delta(
             f"T2.act.llm: next_state.interior.{layer}.{key} 必须是 int，"
             f"got {type(current).__name__}"
         )
-    signed_delta = delta if direction == "up" else -delta
-    bucket[key] = max(0, min(100, current + signed_delta))
+    bucket[key] = max(0, min(100, current + delta))
 
 
-def _magnitude_midpoint(magnitude: str) -> int:
-    low, high = MAGNITUDE_RANGE[magnitude]
-    return (low + high) // 2
+def _signed_effect_midpoint(effect: StateEffect) -> int:
+    low, high = MAGNITUDE_RANGE[effect.magnitude]
+    midpoint = (low + high) // 2
+    return midpoint if effect.direction == "up" else -midpoint
+
+
+def _layer_for_key(key: str) -> str:
+    return "needs" if key in _LAYER_KEYS["needs"] else "affect"
 
 
 def _effect_path(key: str) -> str:
-    layer = "needs" if key in _LAYER_KEYS["needs"] else "affect"
-    return f"{layer}.{key}"
+    return f"{_layer_for_key(key)}.{key}"
 
 
 __all__ = [

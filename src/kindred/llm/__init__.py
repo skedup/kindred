@@ -32,7 +32,12 @@ from kindred.llm.client import (
     ToolCapableLlmClient,
     ToolLoopError,
 )
-from kindred.llm.deepseek_client import DeepSeekLlmClient, DeepSeekLlmClientError
+from kindred.llm.deepseek_client import (
+    DEFAULT_DEEPSEEK_MODEL,
+    DEFAULT_DEEPSEEK_REASONING_EFFORT,
+    DeepSeekLlmClient,
+    DeepSeekLlmClientError,
+)
 from kindred.llm.factory import build_llm_client
 from kindred.llm.gemini_client import GeminiLlmClient, GeminiLlmClientError
 from kindred.llm.mock import MockLlmClient, MockToolRound, MockToolScript, Scenario
@@ -47,6 +52,8 @@ __all__ = [
     "AnthropicLlmClientError",
     "ClaudeCodeLlmClient",
     "ClaudeCodeLlmClientError",
+    "DEFAULT_DEEPSEEK_MODEL",
+    "DEFAULT_DEEPSEEK_REASONING_EFFORT",
     "DeepSeekLlmClient",
     "DeepSeekLlmClientError",
     "GeminiLlmClient",

@@ -1165,6 +1165,7 @@ def _render_current_activity(next_state: dict[str, Any], activities_dir: Path) -
     name = activity.get("name")
     step = activity.get("step")
     desc = activity.get("desc") or ""
+    engagement = activity.get("engagement")
     dest_names = _destination_plan_names(activity)
     parts = [f"活动：{name}"]
     if step:
@@ -1186,6 +1187,12 @@ def _render_current_activity(next_state: dict[str, Any], activities_dir: Path) -
         parts.append(f"目的地计划：去「{'」「'.join(dest_names)}」（已选中、还没到）")
     if desc:
         parts.append(f"（{desc}）")
+    if (
+        isinstance(engagement, (int, float))
+        and not isinstance(engagement, bool)
+        and 0 <= engagement <= 1
+    ):
+        parts.append(f"engagement：{engagement:g}（上一拍投入程度，仅作软事实）")
     line = "｜".join(parts)
     # 渲 terminal_when（end_activity 出口条件）——sense 据此判「该完成/中断/继续」。
     # settle 是框架隐式终态（不属任何 activity 的 uses），无 terminal_when，不渲。

@@ -27,7 +27,8 @@ llm:
   # provider=claude_code / anthropic 时把 model 配成 Claude 模型（如 claude-haiku-4-5 / claude-opus-4-8）；
   # claude_code 机器需 claude auth login，anthropic 经 env ANTHROPIC_API_KEY 注入（可选 ANTHROPIC_BASE_URL）。
   # provider=google 时把 model 配成 gemini 模型（如 gemini-3.5-flash），经 env GEMINI_API_KEY 注入（可选 GEMINI_BASE_URL）。
-  # provider=deepseek 时默认可用 deepseek-v4-flash，经 env DEEPSEEK_API_KEY 注入（可选 DEEPSEEK_BASE_URL）。
+  # provider=deepseek 时推荐 model=deepseek-v4-pro；client 固定 thinking=enabled / reasoning_effort=high，
+  # 经 env DEEPSEEK_API_KEY 注入（可选 DEEPSEEK_BASE_URL）。
   # provider=openai 时把 model 配成 OpenAI 模型，经 env OPENAI_API_KEY 注入（可选 OPENAI_BASE_URL，默认含 /v1）。
   provider: google
   # provider=claude_code 单次 claude -p 子进程超时（秒）。心每 tick 起一个 claude 子进程

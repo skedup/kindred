@@ -11,6 +11,7 @@ from kindred.activity import ActivitySkillError, load_activity_skill, resolve_st
 from kindred.activity.action import load_atomic_action
 from kindred.graph.tick._state_transition import SETTLE_STEP
 from kindred.llm.templates import render_prompt
+from kindred.state.interior import Needs
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ class ActPromptContext:
     possession_facts_section: str = ""
     decision_reason: str = ""
     sense_note: str = ""
+    current_engagement: float | None = None
 
 
 def load_activity_prompt_context(
@@ -188,6 +190,7 @@ def render_act_prompt(context: ActPromptContext) -> str:
     skill_section = render_activity_prompt_context(
         context.activity,
         end_activity=context.kind == "end_activity",
+        current_step=context.current_step,
     )
     action_names = {action.name for action in context.activity.actions}
     possession_facts_section = ""
@@ -202,6 +205,7 @@ def render_act_prompt(context: ActPromptContext) -> str:
     outbound_section = _render_outbound_fact_section(context.outbound)
     artifact_section = _render_artifact_section(context.committed_artifacts)
     decision_handoff_section = _render_decision_handoff(context)
+    engagement_section = _render_engagement_section(context)
     logger.debug(
         "prompt_sections role=act.llm activated_skill_chars=%d reason=activity_selected "
         "phase_context_chars=%d "
@@ -212,7 +216,8 @@ def render_act_prompt(context: ActPromptContext) -> str:
         + len(outbound_section)
         + len(artifact_section)
         + len(possession_facts_section)
-        + len(decision_handoff_section),
+        + len(decision_handoff_section)
+        + len(engagement_section),
         context.kind,
     )
     return render_prompt(
@@ -228,6 +233,7 @@ def render_act_prompt(context: ActPromptContext) -> str:
         outbound_fact_section=outbound_section,
         artifact_section=artifact_section,
         decision_handoff_section=decision_handoff_section,
+        engagement_section=engagement_section,
         en_route_destinations=context.en_route_destinations,
     )
 
@@ -253,10 +259,18 @@ def _render_decision_handoff(context: ActPromptContext) -> str:
     return "## 这一拍的行动依据\n" + "\n".join(lines) if lines else ""
 
 
+def _render_engagement_section(context: ActPromptContext) -> str:
+    value = context.current_engagement
+    if context.kind not in {"advance_activity", "end_activity"} or value is None:
+        return ""
+    return f"## 当前活动投入感\n- engagement={value:g}（上一拍软事实；有体验差异时用合法 delta）"
+
+
 def render_activity_prompt_context(
     context: ActivityPromptContext,
     *,
     end_activity: bool = False,
+    current_step: Any = None,
 ) -> str:
     """渲染已投影的 activity 数据；收尾拍省略已无关的机器执行契约。"""
 
@@ -289,13 +303,13 @@ def render_activity_prompt_context(
     if not end_activity:
         lines.append(
             "原子动作（step 只能从这几个选；intent 是该动作在本 activity 的味道；"
-            "effect 为 Host 将按档位中点确定性应用的 baseline+override，"
-            "final_state_diff 不要重复这些 key）："
+            "effect 的 direction/magnitude 是 declared hard boundary）："
         )
     for action in context.actions if not end_activity else ():
         effects = (
             "、".join(
-                f"{name} {direction} {magnitude}" for name, direction, magnitude in action.effects
+                f"{_effect_path(name)} {direction} {magnitude}"
+                for name, direction, magnitude in action.effects
             )
             or "（无）"
         )
@@ -319,17 +333,43 @@ def render_activity_prompt_context(
                     f"        - {action.name}.{place_binding.slot_id} -> "
                     f"{place_binding.binding_id}{suffix}"
                 )
+    if not end_activity:
+        if context.requested_target and current_step is None:
+            lines.append(
+                "这是新 Activity run：实际选中的 Action 是 entry；declared key 可省略交给 Host "
+                "中点，也可提交合法 signed override。"
+            )
+        elif isinstance(current_step, str):
+            lines.append(
+                f"上一拍 step={current_step}：继续同一 step 时不得重提其 declared key；"
+                "切换到不同 Action 才是 entry，可省略或合法 override 新 Action effect。"
+            )
+    if end_activity and isinstance(current_step, str):
+        previous_actions = [action for action in context.actions if action.name == current_step]
+        if len(previous_actions) == 1 and previous_actions[0].effects:
+            effect_keys = "、".join(
+                _effect_path(name) for name, _direction, _magnitude in previous_actions[0].effects
+            )
+            lines.append(
+                f"上一 Action 已由 Host 结算的 effect keys：{effect_keys}；"
+                "end 的 Needs/Affect 回味不要再使用这些 key，其他未声明轴仍可按本拍真实情境"
+                "提交 small signed delta。"
+            )
     lines.append(f"终止条件（心仲裁何时 end_activity）：{context.terminal_when}")
     lines.append(
         "收尾（end_activity）：满足终止条件就 end_activity。end 不是清空，是转进一拍"
         f"「{SETTLE_STEP}（谢幕回望）」：回顾这一程的感受、结这程总账（只做小幅 "
-        "Needs/Affect 回味，不写 mood）、该记的内容落盘。settle 是谢幕的一拍，"
+        "Needs/Affect signed delta 回味，不写 mood）、该记的内容落盘。settle 是谢幕的一拍，"
         "不是歇脚的沙发——回望过下个 tick 就去开始下一件事，世界很大，别赖在 settle 里。"
     )
     if context.requires and not end_activity:
         lines.append(f"需要：{'、'.join(context.requires)}")
     lines.extend(("", context.method or ""))
     return "\n".join(lines)
+
+
+def _effect_path(name: str) -> str:
+    return f"{'needs' if name in Needs.model_fields else 'affect'}.{name}"
 
 
 def _render_outbound_fact_section(context: OutboundFactContext) -> str:

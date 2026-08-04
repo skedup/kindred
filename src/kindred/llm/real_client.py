@@ -102,11 +102,20 @@ JSON schema：
   仍想继续聊天。
 - 上一拍 note 和轨迹中的 note 只维持主观连续性，不能单独证明对方已经回应、行动已经完成或
   外部事实已经改变。
-- 普通连续拍默认 thought_diff.add / remove 都为空；只有预计跨多个 tick 仍会影响生活的新命题
-  才 add。默认空不等于机械保留：每拍都检视当前 Thought 是否仍在实际影响当下；已经完成、
-  失去现实前提、或只剩叙事惯性的念头应逐条 remove，不能因为 tag 是情感/关系就持续占据注意力。
-  已有 Thought 的同义改写不是新命题；天气感受、动作过程、饭后余韵等短暂体验只留在 note。
-  明确的新约定、持续意图或未完成关切符合条件时仍可 add，稀疏不等于一律为空。
+- 普通连续拍默认 thought_diff.add / remove 都为空。Thought 表达“下一拍醒来时仍会自然占据一点
+  注意”的事件余韵；add 必须是本拍首次形成且会延续几拍的具体关注。
+  它可以来自本拍对方表达、一次性 Action 体验结果、当前具体处境、行动体验、世界观察，或本拍新形成
+  的未决意图、疑问和判断。没有 partner/Grade 也可形成；双条件成立就应 add，勿因来源默认省略，
+  但材料本身不自动要求 add。普通 Action 完成、瞬时感官和已结束的微小感受通常只留在 note。
+  已有 Thought、未变化 State、trajectory、last_note 与反复可见的旧事实只帮助判断连续性，不能把
+  同一关注机械换词后再次 add；Thought 也不能改写 canonical hard fact。
+  短期余韵通常给 1~4 小时 expire_at，持续未决事项通常给 4~12 小时；
+  只有明确跨日仍会影响生活的内容才更长。
+  默认空不等于机械保留：每拍都检视当前 Thought 是否仍在实际影响当下；已经完成、失去现实前提、
+  或只剩叙事惯性的念头应逐条 remove，不能因为 tag 是情感/关系就持续占据注意力。
+- Needs 高满足表示当前欠缺已较充分满足，不构成继续抬高同轴或机械重复低摩擦 Activity 的理由。
+  这只是生活张力之一，不是阈值推荐或“必须出门”规则；
+  仍综合当前事实、意图、Presence、体力、天气和候选 Skill。
 - settle + act=false 时，允许注意自然淡化或转移，不必围绕上一拍意象继续改写。
 - act=true 时 kind 必填、target_activity 必填
 - **target_activity 必须原样取自 user 消息「可选的活动」清单中的某一项**（snake_case
@@ -150,8 +159,7 @@ applies_when 软前提、kind（start_activity / advance_activity / end_activity
 2. 如果本 tick 发生了工具能表达的事件/效果，必须调用「本次可用工具」动态段里
    明确列出的工具表达，而不是在最终 JSON 里手填字段或 tool_trace。
 
-current_state 记录本拍真实执行或正在推进的动作，不是下一拍计划；Host 立即应用 effect，desc/diff
-只写本拍事实。
+current_state 是本拍真实动作，不是下一拍计划；declared effect 只在 Action entry 结算。
 
 工具授权规则：
 - 「本次可用工具」由系统按当前 activity 的 action tools 与 location_bindings 动态注入。
@@ -171,8 +179,6 @@ current_state 记录本拍真实执行或正在推进的动作，不是下一拍
       "engagement": 0.0~1.0,
       "for_what": "为什么做"
     },
-    "needs": { "hunger": "up" 或 "down", "comfort": "up" 或 "down", ... },
-    "affect": { "stress": "up" 或 "down", ... },
     "embodiment": { "top": { "item_key": "已从 list_inventory 选中的 key" } },
     "bag": {
       "item": { "item_key": "已从 list_inventory 选中的包 key" },
@@ -200,7 +206,8 @@ affect 合法 key：stress / focus / arousal / clarity。别把 need 字段写�
 - hunger / fatigue / stress / arousal 越高，表示越饿 / 越疲劳 / 越紧张 / 越唤醒；
 - energy / focus / clarity 越高，表示越有精力 / 越专注 / 越清晰；
 - comfort / social / stimulation / aesthetic 越高，表示舒适安全、连接、新鲜刺激、美感越满足。
-up / down 只表示数字方向，不表示欲求强弱。
+needs / affect 只接受 nonzero strict integer delta：正增负减，不是 next value；
+bool、0、float、数字字符串和对象非法。档位硬区间：small=3..10、medium=10..25、large=25..40。
 embodiment / bag / presence.others 都是可选的局部更新：只列本拍真实改变的字段，没列的字段会保留。
 - change_outfit / pack_bag / makeup 被选中就表示本拍完成；同拍分别提交实际改变的穿着槽位、
   bag.item/items、非空 makeup。无变化就跳过，不在 desc 里假装。
@@ -232,12 +239,12 @@ final_state_diff 不得包含 location / time / environment / interior：
   写成已经发生。
 
 规则：
-- 当前 Action 声明的 state effect 由 Host 确定性应用；不要在 final_state_diff 重复这些 key。
-- needs / affect 只可用 up / down 补充本拍情境影响，合计最多两项；允许完全省略。
-- 情境影响只可调整当前 Action 未声明的 key；绝对数值、数值字符串、嵌套对象都会令整份
-  proposal 被拒绝。
-- end_activity 没有 Action effect，只可给至多两项小幅情境回味；不要伪造新动作，也不要在
-  T2 写 mood。
+- entry 声明 key 可省略（Host 中点）或用符合 direction/magnitude 的 override 替换（不叠加）；
+  有投入差异时主动染色，勿机械省略或固定中点/最小值。
+- same-step 不重放且不得提交当前 Action declared key；end 也不重放且不得提交上一 Action
+  declared key。
+- contextual 合计最多两项、绝对值 3..10；有具体变化才写；反常但自洽可接受。
+- end_activity 只可给合法 contextual 回味；不要伪造新动作，也不要在 T2 写 mood。
 - act=false 不进入本节点，不产生 Needs / Affect 行动结果。
 - committed=false 时，可不给 final_state_diff（或给空 {}），填 failure_reason。
 """
