@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from kindred.llm.client import Role
 
 _LOG = logging.getLogger(__name__)
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEFAULT_DEEPSEEK_REASONING_EFFORT = "high"
 _KNOWN_FINISH_REASONS = frozenset(
     {"stop", "tool_calls", "length", "content_filter", "insufficient_system_resource"}
 )
@@ -48,7 +50,7 @@ class DeepSeekLlmClient:
         self,
         *,
         api_key: str,
-        model: str,
+        model: str = DEFAULT_DEEPSEEK_MODEL,
         base_url: str = "https://api.deepseek.com",
         max_tokens: int = 8192,
         timeout_s: float = 60.0,
@@ -197,7 +199,7 @@ class DeepSeekLlmClient:
             "model": self._model,
             "messages": messages,
             "thinking": {"type": "enabled"},
-            "reasoning_effort": "high",
+            "reasoning_effort": DEFAULT_DEEPSEEK_REASONING_EFFORT,
             "response_format": {"type": "json_object"},
             "max_tokens": self._max_tokens,
             "stream": False,

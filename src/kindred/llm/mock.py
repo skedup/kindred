@@ -486,8 +486,8 @@ class MockLlmClient:
                         "desc": "刚吃完，坐着回味这一程，心里暖暖的",
                         "engagement": 0.3,
                     },
-                    # end 没有 Action effect；回味只提交一项 small 情境方向。
-                    "affect": {"clarity": "up"},
+                    # end 没有 Action effect；回味只提交一项 small signed delta。
+                    "affect": {"clarity": 4},
                 },
                 "committed": True,
                 "failure_reason": None,

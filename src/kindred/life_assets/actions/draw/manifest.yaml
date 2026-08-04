@@ -1,6 +1,9 @@
 name: draw
 desc: 把脑海里已经成形的画面慢慢画出来
 state_effects:
+  aesthetic:
+    direction: up
+    magnitude: small
   stimulation:
     direction: up
     magnitude: small

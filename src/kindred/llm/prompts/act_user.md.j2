@@ -36,6 +36,9 @@
 {% if decision_handoff_section %}
 {{ decision_handoff_section }}
 {% endif %}
+{% if engagement_section %}
+{{ engagement_section }}
+{% endif %}
 ## 你此刻在哪一 step
 {% if kind == "start_activity" -%}
 这是刚 start 的新活动。选择本拍真实执行或开始推进的第一个原子动作，并把截至本拍已发生的事实写入
