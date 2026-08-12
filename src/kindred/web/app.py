@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from kindred import __version__
 from kindred.capability_host.artifacts import ArtifactStore, ArtifactStoreError
 from kindred.config.loader import load_kindred_config
 from kindred.config.schema import KindredConfig
@@ -98,7 +99,7 @@ def create_app(
     app = FastAPI(
         title="Kindred Life — 只读可视化",
         description="观察 ta 的生活。只读，绝不写库。",
-        version="0.1.0",
+        version=__version__,
     )
     api = APIRouter()
 

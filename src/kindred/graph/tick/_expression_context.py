@@ -57,7 +57,7 @@ def project_expression_context(
         if any(weather):
             scene.append(f"- 天气：{'；'.join(part for part in weather if part)}")
     return ExpressionContext(
-        soul_excerpt=_text(soul_excerpt, 200),
+        soul_excerpt=_text(soul_excerpt, 500),
         scene_lines=tuple(scene),
         possession_lines=expression_possession_fact_lines(state),
         activity_line=_activity_line(state.get("activity")),

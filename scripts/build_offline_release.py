@@ -31,8 +31,15 @@ def _load_inputs(root: Path) -> dict[str, Any]:
         value = json.loads((root / "distribution/release-inputs.json").read_text())
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ReleaseBuildError("release inputs are unreadable") from exc
-    if value.get("schema_version") != 1 or value.get("release_version") != "0.1.0":
+    version = value.get("release_version")
+    if value.get("schema_version") != 1 or not isinstance(version, str):
         raise ReleaseBuildError("release inputs have an unsupported schema or version")
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        raise ReleaseBuildError("release inputs have an unsupported schema or version")
+    root_rows = [row for row in value.get("first_party", []) if row[:1] == ["kindred"]]
+    expected_wheel = f"kindred-{version}-py3-none-any.whl"
+    if len(root_rows) != 1 or root_rows[0][1:4] != [version, ".", expected_wheel]:
+        raise ReleaseBuildError("release version does not match the root wheel")
     return value
 
 
@@ -123,9 +130,26 @@ def _tar_bundle(source: Path, destination: Path) -> None:
 def _plugin_checksum(root: Path) -> str:
     digest = hashlib.sha256()
     plugin = root / "src/kindred/openclaw/mouth_plugin"
-    for name in ("binding.js", "index.js", "openclaw.plugin.json", "package.json"):
-        digest.update(name.encode() + b"\0" + (plugin / name).read_bytes())
+    for path in sorted(plugin.rglob("*")):
+        if path.is_symlink():
+            raise ReleaseBuildError("Mouth Plugin tree is invalid")
+        if path.is_file():
+            digest.update(path.relative_to(plugin).as_posix().encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _plugin_version(root: Path) -> str:
+    try:
+        package = json.loads((root / "src/kindred/openclaw/mouth_plugin/package.json").read_text())
+        version = package["version"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ReleaseBuildError("Mouth Plugin version is unreadable") from exc
+    if not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        raise ReleaseBuildError("Mouth Plugin version is invalid")
+    return version
 
 
 def _notices(inputs: dict[str, Any], wheels: list[dict[str, Any]]) -> str:
@@ -276,7 +300,10 @@ def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
             "openclaw": inputs["openclaw"],
             "build_tools": inputs["build_tools"],
             "life_assets": {"actions": 13, "activities": 7},
-            "mouth_plugin": {"version": "0.1.0", "sha256": _plugin_checksum(root)},
+            "mouth_plugin": {
+                "version": _plugin_version(root),
+                "sha256": _plugin_checksum(root),
+            },
             "web": {"included": True, "build": web},
             "draw": {"included": True, "enabled_by_default": False},
             "install_skill": {

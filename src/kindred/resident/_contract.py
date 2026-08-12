@@ -30,7 +30,7 @@ class PersonaTraits(StrictBase):
 
 
 class PersonaProjection(StrictBase):
-    soul_excerpt: str = Field(strict=True, min_length=1, max_length=200)
+    soul_excerpt: str = Field(strict=True, min_length=1, max_length=500)
     traits: PersonaTraits
 
     @field_validator("soul_excerpt")

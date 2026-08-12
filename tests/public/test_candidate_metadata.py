@@ -2,14 +2,31 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import shutil
+import sys
 from pathlib import Path
+from typing import Any
 
 import tomllib
 
+from kindred.openclaw import MOUTH_PLUGIN_DIR
+from kindred.openclaw.install import _plugin_tree_digest
+
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "https://github.com/skedup/kindred"
-RELEASE = f"{REPOSITORY}/releases/download/v0.1.0"
+RELEASE = f"{REPOSITORY}/releases/download/v0.2.0"
+
+
+def _load_release_builder() -> Any:
+    script = ROOT / "scripts/build_offline_release.py"
+    spec = importlib.util.spec_from_file_location("public_build_offline_release", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_root_and_capability_metadata_use_the_public_upstream() -> None:
@@ -17,7 +34,8 @@ def test_root_and_capability_metadata_use_the_public_upstream() -> None:
 
     for path in projects:
         project = tomllib.loads(path.read_text(encoding="utf-8"))["project"]
-        assert project["version"] == "0.1.0"
+        expected_version = "0.2.0" if path == ROOT / "pyproject.toml" else "0.1.0"
+        assert project["version"] == expected_version
         assert project["urls"]["Repository"] == REPOSITORY
         assert project["urls"]["Issues"] == f"{REPOSITORY}/issues"
 
@@ -44,3 +62,35 @@ def test_readmes_and_bootstrap_use_the_versioned_release() -> None:
     bootstrap = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
     assert REPOSITORY in bootstrap
     assert "KINDRED_RELEASE_BASE_URL" in bootstrap
+
+
+def test_release_snapshot_uses_root_version_and_packaged_plugin_identity() -> None:
+    builder = _load_release_builder()
+    inputs = builder._load_inputs(ROOT)
+    root_row = next(row for row in inputs["first_party"] if row[0] == "kindred")
+    plugin = json.loads(
+        (ROOT / "src/kindred/openclaw/mouth_plugin/package.json").read_text(encoding="utf-8")
+    )
+
+    assert inputs["release_version"] == "0.2.0"
+    assert root_row[1:4] == ["0.2.0", ".", "kindred-0.2.0-py3-none-any.whl"]
+    assert builder._plugin_version(ROOT) == plugin["version"] == "0.3.0"
+
+
+def test_mouth_plugin_checksum_covers_outbound_runtime(tmp_path: Path) -> None:
+    builder = _load_release_builder()
+    source = ROOT / "src/kindred/openclaw/mouth_plugin"
+    plugin = tmp_path / "src/kindred/openclaw/mouth_plugin"
+    shutil.copytree(source, plugin)
+    original = builder._plugin_checksum(tmp_path)
+
+    outbound = plugin / "outbound.js"
+    outbound.write_text(outbound.read_text(encoding="utf-8") + "\n// changed\n", encoding="utf-8")
+
+    assert builder._plugin_checksum(tmp_path) != original
+
+
+def test_release_and_installer_use_the_same_mouth_plugin_identity() -> None:
+    builder = _load_release_builder()
+
+    assert builder._plugin_checksum(ROOT) == _plugin_tree_digest(MOUTH_PLUGIN_DIR)
