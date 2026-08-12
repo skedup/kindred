@@ -55,7 +55,7 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
     root = Path(__file__).resolve().parents[3]
     inputs = json.loads((root / "distribution/release-inputs.json").read_text())
 
-    assert inputs["release_version"] == "0.1.0"
+    assert inputs["release_version"] == "0.2.0"
     assert set(inputs["platforms"]) == {"macos-arm64", "ubuntu24-x86_64"}
     assert inputs["build_tools"] == {
         "node": "22.18.0",
@@ -75,6 +75,26 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
         assert all(len(item[3]) == 64 and item[2].endswith(".whl") for item in wheels)
 
 
+def test_release_version_must_match_the_root_wheel(tmp_path: Path) -> None:
+    release = _load_module()
+    distribution = tmp_path / "distribution"
+    distribution.mkdir()
+    (distribution / "release-inputs.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "release_version": "0.2.0",
+                "first_party": [
+                    ["kindred", "0.1.0", ".", "kindred-0.1.0-py3-none-any.whl", "0" * 64]
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(release.ReleaseBuildError, match="root wheel"):
+        release._load_inputs(tmp_path)
+
+
 def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -90,8 +110,9 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
             (item / "manifest.yaml").write_text("name: fixture\n")
     plugin = root / "src/kindred/openclaw/mouth_plugin"
     plugin.mkdir(parents=True)
-    for name in ("binding.js", "index.js", "openclaw.plugin.json", "package.json"):
+    for name in ("binding.js", "index.js", "openclaw.plugin.json", "outbound.js"):
         (plugin / name).write_text("fixture\n")
+    (plugin / "package.json").write_text(json.dumps({"version": "0.3.0"}))
     install_skill = root / "src/kindred/openclaw/install_skill/SKILL.md"
     install_skill.parent.mkdir()
     install_skill.write_text("---\nname: install-kindred\ndescription: fixture\n---\n")
@@ -163,6 +184,7 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
         "sha256": hashlib.sha256(install_skill.read_bytes()).hexdigest(),
     }
     assert manifest["draw"] == {"included": True, "enabled_by_default": False}
+    assert manifest["mouth_plugin"]["version"] == "0.3.0"
     for platform in manifest["platforms"]:
         bundle = output / manifest["platforms"][platform]["bundle"]["filename"]
         with tarfile.open(bundle) as archive:

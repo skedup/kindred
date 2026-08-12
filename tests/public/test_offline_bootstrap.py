@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+VERSION = "0.2.0"
+
 
 def _command(path: Path, name: str, body: str) -> None:
     target = path / name
@@ -49,7 +51,7 @@ exit 2
     with tarfile.open(stage / "python-runtime.tar.gz", "w:gz") as archive:
         archive.add(runtime / "python", arcname="python")
     (stage / "wheelhouse").mkdir()
-    name = f"kindred-v0.1.0-{platform}.tar.gz"
+    name = f"kindred-v{VERSION}-{platform}.tar.gz"
     with tarfile.open(server / name, "w:gz") as archive:
         for item in stage.iterdir():
             archive.add(item, arcname=item.name)
@@ -60,7 +62,7 @@ exit 2
     bundle = server / name
     manifest = {
         "schema_version": 1,
-        "release_version": "0.1.0",
+        "release_version": VERSION,
         "platforms": {
             platform: {
                 "bundle": {
@@ -138,15 +140,15 @@ def test_fake_offline_install_selects_platform_and_web_mode(
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "home/install-mode").read_text() == ("1" if no_web else "0")
-    marker = tmp_path / "home/.local/share/kindred/runtime/0.1.0/.kindred-release-version"
-    assert marker.read_text().strip() == "0.1.0"
+    marker = tmp_path / f"home/.local/share/kindred/runtime/{VERSION}/.kindred-release-version"
+    assert marker.read_text().strip() == VERSION
     assert "Continue in a terminal" in result.stdout
 
 
 def test_same_version_repairs_but_different_version_refuses_before_download(tmp_path: Path) -> None:
     same = tmp_path / "same"
     assert _run(same, "macos-arm64").returncode == 0
-    kindred = same / "home/.local/share/kindred/runtime/0.1.0/venv/bin/kindred"
+    kindred = same / f"home/.local/share/kindred/runtime/{VERSION}/venv/bin/kindred"
     kindred.write_text("healthy\n")
     failed = _run(same, "macos-arm64", fail_verify=True)
     assert failed.returncode == 2
@@ -156,7 +158,7 @@ def test_same_version_repairs_but_different_version_refuses_before_download(tmp_
     different = _run(tmp_path / "different", "macos-arm64", installed_version="9.9.9")
     assert different.returncode == 2
     assert "different Kindred version" in different.stderr
-    unexpected = tmp_path / "different" / "home" / ".local/share/kindred/runtime/0.1.0"
+    unexpected = tmp_path / "different" / "home" / f".local/share/kindred/runtime/{VERSION}"
     assert not unexpected.exists()
 
 
@@ -190,7 +192,7 @@ def test_hash_mismatch_and_archive_traversal_fail_closed(tmp_path: Path) -> None
     server.mkdir()
     commands.mkdir()
     _bundle(server, "macos-arm64")
-    bundle = server / "kindred-v0.1.0-macos-arm64.tar.gz"
+    bundle = server / f"kindred-v{VERSION}-macos-arm64.tar.gz"
     bundle.write_bytes(bundle.read_bytes() + b"changed")
     _command(commands, "openclaw", "printf 'OpenClaw 2026.6.10 (aa69b12)\\n'\n")
     _command(commands, "uname", '[ "$1" = -s ] && echo Darwin || echo arm64\n')

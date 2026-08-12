@@ -13,7 +13,9 @@ from kindred.resident._contract import PersonaProjection, ResidentInitError
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com"
 _SYSTEM = (
     "只根据给定 SOUL 与 IDENTITY 生成严格 JSON 运行投影。"
-    "soul_excerpt 是不创造新人格事实的简短自然语言摘录；"
+    "soul_excerpt 只从 SOUL 派生，不从 IDENTITY 补充人格事实；"
+    "保留稳定核心和会改变反应方式的真实对比面，不用原文没有的常见美德替换具体描述；"
+    "舍弃实现说明、系统职责、工具与行动建议，最多 500 字且不追求写满；"
     "traits 包含 openness、agreeableness、conscientiousness、awareness、eros，"
     "每项均为 0..100 整数。不得输出解释或其他字段。"
 )

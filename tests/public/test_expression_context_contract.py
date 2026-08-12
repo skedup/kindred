@@ -6,6 +6,9 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import pytest
+from pydantic import ValidationError
+
 from kindred.capability_host import (
     ArtifactStore,
     CapabilityRegistry,
@@ -22,9 +25,13 @@ from kindred.capability_host.facts import (
 from kindred.config import load_kindred_config
 from kindred.graph.tick._expression_context import ExpressionContext, project_expression_context
 from kindred.graph.tick.act_llm import _t2_act_llm_impl
+from kindred.llm.real_client import _DREAM_EXCERPT_SYSTEM_PROMPT_BODY
 from kindred.llm.templates import render_prompt
 from kindred.llm.tools import ToolLoopResult
+from kindred.resident import PersonaProjection, PersonaTraits
+from kindred.resident._projection import _SYSTEM as _RESIDENT_PROJECTION_SYSTEM
 from kindred.state._seed import make_doc_example_state
+from kindred.state.dream import SoulExcerptResponse
 from kindred_capability_compose import create_capability as create_compose
 from kindred_capability_sdk import SecretResolver, ToolDef
 from kindred_capability_send import create_capability as create_send
@@ -61,6 +68,26 @@ class _CaptureClient:
             tool_events=(),
             rounds=1,
         )
+
+
+def test_soul_excerpt_uses_one_500_character_runtime_contract() -> None:
+    excerpt = "x" * 500
+    traits = PersonaTraits(
+        openness=50,
+        agreeableness=50,
+        conscientiousness=50,
+        awareness=50,
+        eros=50,
+    )
+
+    assert PersonaProjection(soul_excerpt=excerpt, traits=traits).soul_excerpt == excerpt
+    assert SoulExcerptResponse(soul_excerpt=excerpt).soul_excerpt == excerpt
+    with pytest.raises(ValidationError):
+        PersonaProjection(soul_excerpt=excerpt + "x", traits=traits)
+    with pytest.raises(ValidationError):
+        SoulExcerptResponse(soul_excerpt=excerpt + "x")
+    assert "最多 500" in _RESIDENT_PROJECTION_SYSTEM
+    assert "最多 500" in _DREAM_EXCERPT_SYSTEM_PROMPT_BODY
 
 
 def _host_runtime(tmp_path: Path) -> HostRuntime:
@@ -102,7 +129,7 @@ def test_expression_projection_is_bounded_fresh_and_immutable() -> None:
     context = project_expression_context(
         state,
         triggered_at=state["time"]["iso"],
-        soul_excerpt="声线" * 200,
+        soul_excerpt="声线" * 300,
         sense_note="心声" * 100,
         decision_reason="缘由" * 100,
         weather_ttl_minutes=60,
@@ -113,13 +140,13 @@ def test_expression_projection_is_bounded_fresh_and_immutable() -> None:
     assert context == project_expression_context(
         state,
         triggered_at=state["time"]["iso"],
-        soul_excerpt="声线" * 200,
+        soul_excerpt="声线" * 300,
         sense_note="心声" * 100,
         decision_reason="缘由" * 100,
         weather_ttl_minutes=60,
         weather_location="synthetic-city",
     )
-    assert len(context.soul_excerpt) <= 200
+    assert len(context.soul_excerpt) == 500
     assert len(context.sense_note) <= 130
     assert len(context.decision_reason) <= 130
     assert len(context.ambience) <= 160
@@ -129,7 +156,7 @@ def test_expression_projection_is_bounded_fresh_and_immutable() -> None:
 
 def test_expression_template_has_a_fixed_small_envelope() -> None:
     context = ExpressionContext(
-        soul_excerpt="x" * 200,
+        soul_excerpt="x" * 500,
         scene_lines=("x" * 150,),
         possession_lines=("x" * 240,),
         activity_line="x" * 160,
@@ -140,7 +167,7 @@ def test_expression_template_has_a_fixed_small_envelope() -> None:
 
     rendered = render_prompt("expression_context.md.j2", **context.__dict__).strip()
 
-    assert len(rendered) <= 1400
+    assert len(rendered) <= 1700
     assert "此刻的生活材料" in rendered
 
 

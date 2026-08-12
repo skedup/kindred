@@ -40,7 +40,7 @@ ReflectionOperation = Literal["append_to_section", "replace_section", "append_fi
 class SoulExcerptResponse(StrictBase):
     """从最终候选 SOUL 派生出的有界 Heart 投影。"""
 
-    soul_excerpt: str = Field(strict=True, min_length=1, max_length=200)
+    soul_excerpt: str = Field(strict=True, min_length=1, max_length=500)
 
     @field_validator("soul_excerpt")
     @classmethod
