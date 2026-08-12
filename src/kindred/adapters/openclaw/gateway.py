@@ -2,7 +2,7 @@
 
 两条能力（迁入 adapters/openclaw 后这是读者理解本模块边界的入口）：
 - **read**：``fetch_chat_history`` 拉 main-session ``chat.history``（earlier milestone）
-- **write**：``send_chat`` 注入嘴 main session 让心主动 push（earlier milestone）
+- **write**：``send_direct`` 直发 approved peer；``send_chat`` 保留给普通 agent turn
 
 earlier milestone: the heart daemon pulls main-session ``chat.history`` over the OpenClaw
 Gateway JSON-RPC WebSocket so real conversation (partner + my_voice) mirrors
@@ -14,11 +14,8 @@ agent replies (probe: 3 received / 0 sent), so a hook cannot capture my_voice.
 both user and assistant turns.
 
 This is a trimmed adaptation of a first-party predecessor's ``daemon/gateway.py``.
-The initial port kept only the **read** path (connect/auth + chat.history); the
-``send_chat`` write path was restored later so the heart can proactively reach
-the user (心主动 push，docs/13 §341)：``chat.send(message, sessionKey=嘴 main
-session)`` 注入嘴 session 触发一轮，由嘴投递到 channel。``session_create`` 仍未恢复
-（Kindred daemon 用 in-process LangGraph 跑 tick，不靠 session_send 驱动 subagent）。
+Heart outbound uses core ``send`` and then the Kindred Mouth context RPC. Generic
+``chat.send`` remains available for callers that intentionally need an agent turn.
 
 Connection style: each call opens a fresh connection, authenticates, sends one
 request, reads the response, and closes. No long-lived socket — the daemon
@@ -52,6 +49,7 @@ _CLIENT_ID = "gateway-client"
 _CLIENT_MODE = "backend"
 _ROLE = "operator"
 _SCOPES = ["operator.admin"]
+_PROTOCOL = 4
 _PLATFORM = "linux"
 _DEVICE_FAMILY = ""
 
@@ -152,12 +150,15 @@ class GatewayClient:
                 challenge = json.loads(ws.recv())
             except (OSError, websocket.WebSocketException) as exc:
                 raise _RetryableError(f"awaiting challenge failed: {exc}") from exc
-            except (json.JSONDecodeError, TypeError) as exc:
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
                 raise _RetryableError(f"challenge not JSON: {exc}") from exc
 
-            nonce = (challenge.get("payload") or {}).get("nonce")
-            if not nonce:
-                raise GatewayError(f"connect.challenge missing nonce: {challenge!r}")
+            if not isinstance(challenge, dict) or challenge.get("event") != "connect.challenge":
+                raise GatewayError("connect.challenge event is invalid")
+            challenge_payload = challenge.get("payload") if isinstance(challenge, dict) else None
+            nonce = challenge_payload.get("nonce") if isinstance(challenge_payload, dict) else None
+            if not isinstance(nonce, str) or not nonce:
+                raise GatewayError("connect.challenge nonce is invalid")
 
             # Sign the v3 device-auth payload with our persisted ed25519 key.
             signed_at_ms = int(time.time() * 1000)
@@ -180,8 +181,8 @@ class GatewayClient:
                 "id": str(uuid.uuid4()),
                 "method": "connect",
                 "params": {
-                    "minProtocol": 4,
-                    "maxProtocol": 4,
+                    "minProtocol": _PROTOCOL,
+                    "maxProtocol": _PROTOCOL,
                     "client": {
                         "id": _CLIENT_ID,
                         "version": "1.0.0",
@@ -207,10 +208,30 @@ class GatewayClient:
                 connect_resp = json.loads(ws.recv())
             except (OSError, websocket.WebSocketException) as exc:
                 raise _RetryableError(f"awaiting connect response failed: {exc}") from exc
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+                raise GatewayError("connect response is invalid") from exc
 
-            if connect_resp.get("type") == "res" and not connect_resp.get("ok", True):
-                msg = connect_resp.get("error", {}).get("message", "unknown")
-                raise GatewayError(f"connect failed: {msg}")
+            if (
+                not isinstance(connect_resp, dict)
+                or connect_resp.get("type") != "res"
+                or connect_resp.get("id") != connect_req["id"]
+                or not isinstance(connect_resp.get("ok"), bool)
+            ):
+                raise GatewayError("connect response is invalid")
+            if connect_resp["ok"] is not True:
+                error = connect_resp.get("error")
+                message = error.get("message") if isinstance(error, dict) else None
+                raise GatewayError(
+                    f"connect failed: {message}" if isinstance(message, str) else "connect failed"
+                )
+            connect_payload = connect_resp.get("payload")
+            if (
+                not isinstance(connect_payload, dict)
+                or connect_payload.get("type") != "hello-ok"
+                or type(connect_payload.get("protocol")) is not int
+                or connect_payload["protocol"] != _PROTOCOL
+            ):
+                raise GatewayError("connect response payload is invalid")
 
             yield ws
         finally:
@@ -250,10 +271,15 @@ class GatewayClient:
                 raw = ws.recv()
             except websocket.WebSocketTimeoutException as exc:
                 raise _RetryableError(f"awaiting {method} response timed out: {exc}") from exc
+            except UnicodeDecodeError as exc:
+                raise _RetryableError(f"{method} got non-JSON frame") from exc
             try:
                 msg = json.loads(raw)
-            except (json.JSONDecodeError, TypeError) as exc:
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
                 raise _RetryableError(f"{method} got non-JSON frame: {exc}") from exc
+
+            if not isinstance(msg, dict):
+                raise _RetryableError(f"{method} response envelope is invalid")
 
             mtype = msg.get("type")
             if mtype == "event":
@@ -261,6 +287,8 @@ class GatewayClient:
             if mtype == "res" and msg.get("id") == req_id:
                 if msg.get("ok") is False:
                     return {"error": f"{method} request failed"}
+                if msg.get("ok") is not True:
+                    raise _RetryableError(f"{method} response envelope is invalid")
                 return {"ok": True, "payload": msg.get("payload", {}) or {}}
             # Mismatched res (shouldn't happen) → keep waiting.
         raise _RetryableError(f"{method}: no matching res within {max_event_frames} frames")
@@ -424,6 +452,91 @@ class GatewayClient:
             offset = next_offset
         return {"error": "sessions.list exceeded page budget"}
 
+    def _side_effect_rpc_once(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        accepts: Callable[[object], bool],
+    ) -> dict[str, Any]:
+        """Send one side-effecting request without retrying after frame write."""
+        import websocket
+
+        attempted = False
+        try:
+            with self._connected_ws() as ws:
+                # ws.send 可在部分写出 frame 后抛错，因此进入调用前即视为已尝试。
+                attempted = True
+                response = self._rpc_call(ws, method, params)
+        except GatewayError:
+            return {"error": f"{method} connection rejected", "side_effect": "none"}
+        except (_RetryableError, OSError, websocket.WebSocketException):
+            return {
+                "error": f"{method} outcome is unknown" if attempted else f"{method} failed",
+                "side_effect": "unknown" if attempted else "none",
+            }
+        if "error" in response:
+            return {"error": f"{method} request rejected", "side_effect": "none"}
+        payload = response.get("payload")
+        if accepts(payload):
+            return {"ok": True, "payload": payload}
+        return {"error": f"{method} outcome is unknown", "side_effect": "unknown"}
+
+    def send_direct(
+        self,
+        *,
+        channel: str,
+        account_id: str,
+        to: str,
+        agent_id: str,
+        session_key: str,
+        message: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Send committed text through OpenClaw core ``send`` without a Mouth turn."""
+        clean = message.strip() if isinstance(message, str) else ""
+        values = (channel, account_id, to, agent_id, session_key, clean, idempotency_key)
+        if any(not isinstance(value, str) or not value.strip() for value in values):
+            return {"error": "send request is invalid", "side_effect": "none"}
+
+        def accepted(payload: object) -> bool:
+            return isinstance(payload, dict) and all(
+                isinstance(payload.get(key), str) and bool(payload[key].strip())
+                for key in ("runId", "messageId", "channel")
+            )
+
+        return self._side_effect_rpc_once(
+            "send",
+            {
+                "channel": channel,
+                "accountId": account_id,
+                "to": to,
+                "agentId": agent_id,
+                "sessionKey": session_key,
+                "message": clean,
+                "idempotencyKey": idempotency_key,
+            },
+            accepts=accepted,
+        )
+
+    def commit_outbound_context(self, operation_id: str, text: str) -> dict[str, Any]:
+        """Append one history-hidden Mouth context row through the HC1 Plugin RPC."""
+        clean = text.strip() if isinstance(text, str) else ""
+        if (
+            not isinstance(operation_id, str)
+            or len(operation_id) != 64
+            or any(char not in "0123456789abcdef" for char in operation_id)
+            or not clean
+        ):
+            return {"error": "commitOutbound request is invalid", "side_effect": "none"}
+        return self._side_effect_rpc_once(
+            "kindred.mouth.commitOutbound",
+            {"operation_id": operation_id, "text": clean},
+            accepts=lambda payload: (
+                isinstance(payload, dict) and payload.get("status") in {"committed", "already_done"}
+            ),
+        )
+
     def send_chat(
         self,
         session_key: str,
@@ -439,18 +552,19 @@ class GatewayClient:
     ) -> dict[str, Any]:
         """Inject ``message`` into ``session_key`` and trigger one agent turn.
 
-        This restores the **write** path that the initial port intentionally
-        dropped, so the heart can push to the user. It mirrors the verified
+        This preserves the generic agent-turn **write** path that the initial
+        port intentionally dropped. Heart outbound does not use this method;
+        it uses :meth:`send_direct`. This method mirrors the verified
         first-party protocol: ``chat.send`` with
         ``{message, sessionKey, idempotencyKey}``.
 
         ``provenance``（可选）：一个 ``systemInputProvenance`` dict
         （``{kind, sourceSessionKey?, sourceChannel?, sourceTool?}``）。复用 openclaw
-        的 inter-session/announce 传输：心传 ``kind="inter_session"``，使这一轮被框成
-        「别处路由来的」（嘴用自己声音重表达）而非终端用户的直接消息。要求连接持有
+        的 inter-session/announce 传输：调用方传 ``kind="inter_session"``，使这一轮被框成
+        「别处路由来的」而非终端用户的直接消息。要求连接持有
         ``operator.admin`` scope（``canInjectSystemProvenance``）——本 client 满足。
         ``provenance`` 被 openclaw 用来注解 agent 的 prompt，且会保留在 transcript
-        消息上（穿过 ``chat.history`` 存活），让心侧据此过滤自己的 echo。
+        消息上（穿过 ``chat.history`` 存活）。
 
         ``suppress_command_interpretation``：传 ``True`` 让注入的文本不被当作 slash
         命令解析。
@@ -474,18 +588,14 @@ class GatewayClient:
         once and return ``side_effect="unknown"``. Pre-send failures return
         ``side_effect="none"``.
 
-        Where ``session_key`` points decides the delivery semantics: it is the
-        user's main session (the mouth). The mouth's turn physically delivers
-        the text to wecom — the heart decides *whether* and *what*, the mouth is
-        only the delivery pipe (see earlier milestone discussion §3, "决策在心，投递经嘴管道").
+        ``session_key`` and optional delivery route are caller-owned. Heart outbound
+        no longer uses this agent-turn path; it uses :meth:`send_direct`.
 
         Returns:
             accepted → ``{"ok": True, ...}``
             pre-send failure → ``{"error": ..., "side_effect": "none"}``
             post-send uncertainty → ``{"error": ..., "side_effect": "unknown"}``
         """
-        import websocket
-
         clean = (message or "").strip()
         if not clean:
             return {"error": "send_chat: message is empty"}
@@ -509,73 +619,13 @@ class GatewayClient:
             params["originatingAccountId"] = originating_account_id
         if originating_thread_id:
             params["originatingThreadId"] = originating_thread_id
-        dispatch_attempted = False
-        try:
-            with self._connected_ws() as ws:
-                req_id = str(uuid.uuid4())
-                req = {"type": "req", "id": req_id, "method": "chat.send", "params": params}
-                # send() 抛错时也可能已经把部分或完整 frame 写入 socket。进入调用后，
-                # 结果只能视为 unknown，不能按 pre-send failure 自动重试。
-                dispatch_attempted = True
-                ws.send(json.dumps(req))
-                ws.settimeout(self.recv_timeout)
-                # Skip event frames; match res by id. A timeout/disconnect after
-                # send means the side effect is unknown and must not be retried.
-                for _ in range(20):
-                    try:
-                        raw = ws.recv()
-                    except websocket.WebSocketTimeoutException:
-                        return {
-                            "error": "chat.send outcome is unknown",
-                            "side_effect": "unknown",
-                        }
-                    try:
-                        msg = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    if msg.get("type") == "event":
-                        continue
-                    if msg.get("type") == "res" and msg.get("id") == req_id:
-                        if msg.get("ok") is False:
-                            return {
-                                "error": "chat.send request rejected",
-                                "side_effect": "none",
-                            }
-                        payload = msg.get("payload")
-                        if (
-                            msg.get("ok") is True
-                            and isinstance(payload, dict)
-                            and payload.get("status") == "started"
-                        ):
-                            return {"ok": True, "payload": payload}
-                        return {
-                            "error": "chat.send outcome is unknown",
-                            "side_effect": "unknown",
-                        }
-                # No matching response after send: the side effect is unknown.
-                return {
-                    "error": "chat.send outcome is unknown",
-                    "side_effect": "unknown",
-                }
-        except GatewayError as exc:
-            # connect / auth failure (pre-send) — not retryable, surface as error.
-            return {"error": str(exc), "side_effect": "none"}
-        except _RetryableError as exc:
-            # Connect-stage network jitter (pre-send): nothing was sent, so no
-            # duplicate-turn risk. We still don't retry here (keep send_chat's
-            # "send once" contract simple); surface as error for the caller
-            # (IOBridge) to degrade. The send actually going out only happens
-            # after _connected_ws yields, past this stage.
-            return {"error": f"send_chat connect failed: {exc}", "side_effect": "none"}
-        except (OSError, websocket.WebSocketException) as exc:
-            return {
-                "error": (
-                    "chat.send outcome is unknown"
-                    if dispatch_attempted
-                    else f"send_chat ws failure: {exc}"
-                ),
-                "side_effect": "unknown" if dispatch_attempted else "none",
-            }
+        return self._side_effect_rpc_once(
+            "chat.send",
+            params,
+            accepts=lambda payload: (
+                isinstance(payload, dict) and payload.get("status") == "started"
+            ),
+        )
 
 
 def _project_session_row(row: dict[str, Any]) -> dict[str, Any]:

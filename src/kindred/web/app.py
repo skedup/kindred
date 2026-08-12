@@ -37,12 +37,17 @@ from kindred.config.loader import load_kindred_config
 from kindred.config.schema import KindredConfig
 from kindred.db import KindredDB
 from kindred.db.artifacts import ArtifactCommitRow
+from kindred.relationship.preflight import (
+    RelationshipPreflightError,
+    require_user_relationship,
+)
 from kindred.web.contracts import (
     ArtifactDetailResponse,
     ArtifactListItem,
     ArtifactListResponse,
     InteriorHistoryResponse,
     NowResponse,
+    RelationshipView,
     StreamResponse,
 )
 from kindred.web.service import (
@@ -173,6 +178,21 @@ def create_app(
             # 当空库处理，绝不触发 DDL 建表（review N-2）。
             return build_now(None, reveal_intimate=do_reveal)
         return build_now(latest, reveal_intimate=do_reveal)
+
+    @api.get("/relationship", response_model=RelationshipView)
+    def relationship() -> RelationshipView:
+        """Strict current user Relationship; missing/corrupt data is never neutralized."""
+        if not resolved_db.exists():
+            raise HTTPException(status_code=503, detail="Relationship view is unavailable")
+        try:
+            with KindredDB.open_readonly(resolved_db) as db:
+                profile = require_user_relationship(db)
+        except (RelationshipPreflightError, sqlite3.OperationalError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Relationship view is unavailable",
+            ) from exc
+        return RelationshipView(**profile.model_dump(exclude={"subject_key", "updated_tick_id"}))
 
     def _paged(
         reader: Callable[[KindredDB, int, int | None], list[dict[str, object]]],

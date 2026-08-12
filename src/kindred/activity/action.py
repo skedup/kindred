@@ -64,7 +64,7 @@ class AtomicAction(StrictBase):
     """一个全局原子动作（状态机节点 / spirit 动画）。
 
     ``name`` = 目录名 = 未来 spirit 动画名（原子动作判据：能用一个动画展示）。
-    ``state_effects`` 是该动作的**基准 effect**（方向硬 + 档位软，activity 染色）。
+    ``state_effects`` 是通常体验软先验，不由 Host 自动兑现或限制本次 signed delta。
     ``applies_when`` 是软前提（自然语言；None/省略=任意情境）——LLM 仲裁能否转
     到此动作的判断依据（选项 C：声明式软前提 + LLM 仲裁，不写死硬转移边）。
     """
@@ -72,7 +72,7 @@ class AtomicAction(StrictBase):
     name: NonBlankStr = Field(description="原子动作名（= 目录名 = spirit 动画名）")
     desc: str | None = Field(default=None, description="这个动作的具体描述")
     state_effects: dict[str, StateEffect] = Field(
-        description="该动作的基准 effect（方向 + 档位），activity 染色落地"
+        description="该动作通常体验的方向与档位软先验，供心结合本次经历解释"
     )
     applies_when: str | None = Field(
         default=None,

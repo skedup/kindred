@@ -1,6 +1,6 @@
 """Thought diff 应用 helper -- 给 sense_llm 节点用。
 
-参考文档:14-heart-graph.md §3.3「主观调 mood + thoughts 增删」/ 09-memory.md §3.2。
+参考文档:14-heart-graph.md §3.3「Thought 增删与 Layer 1 重派」/ 09-memory.md §3.2。
 
 本模块只负责一件事:拿 LLM 输出的 ``thought_diff`` dict + 当前 thoughts dict
 list(storage form),返回应用 diff 后的新 dict list(storage form)。

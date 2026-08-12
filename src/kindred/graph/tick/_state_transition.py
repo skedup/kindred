@@ -10,9 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from kindred.activity import ActivitySkillError, load_activity_skill, resolve_step_effects
+from kindred.activity import ActivitySkillError, load_activity_skill
 from kindred.activity.action import load_atomic_action
-from kindred.activity.skill import MAGNITUDE_RANGE, StateEffect
 from kindred.graph.tick._act_contract import (
     ActLlmContractError,
     safe_state_path,
@@ -29,7 +28,8 @@ _LAYER_KEYS: dict[str, frozenset[str]] = {
     "needs": frozenset(Needs.model_fields),
     "affect": frozenset(Affect.model_fields),
 }
-_CONTEXT_DELTA_RANGE = (3, 10)
+_ENTRY_DELTA_RANGE = (1, 80)
+_CONTINUITY_DELTA_RANGE = (1, 10)
 _T2_MERGE_LAYERS: dict[str, type[BaseModel]] = {
     "embodiment": Embodiment,
     "bag": Bag,
@@ -55,7 +55,6 @@ class StateTransitionResult:
 class _ActionPolicy:
     action_step: str
     is_entry: bool
-    effects: dict[str, StateEffect]
 
 
 @dataclass(frozen=True)
@@ -93,6 +92,7 @@ class StateTransitionApplier:
 
         activity_diff = diff.pop("activity", None)
         with_whom_explicit = isinstance(activity_diff, dict) and "with_whom" in activity_diff
+        _validate_affect_event_touched(affect_event_touched)
         interior_touched = _apply_host_owned_interior(
             working,
             target=self.target,
@@ -100,7 +100,6 @@ class StateTransitionApplier:
             current_state=current_state,
             needs_diff=needs_diff,
             affect_diff=affect_diff,
-            affect_event_touched=_validate_affect_event_touched(affect_event_touched),
             activities_dir=self.activities_dir,
             actions_dir=self.actions_dir,
         )
@@ -328,11 +327,10 @@ def _apply_host_owned_interior(
     current_state: Any,
     needs_diff: Any,
     affect_diff: Any,
-    affect_event_touched: frozenset[str],
     activities_dir: Path,
     actions_dir: Path,
 ) -> bool:
-    """先落 entry Action effect/override，再落最多两项情境 delta。"""
+    """按 Action cadence 校验并应用心提交的经历 delta。"""
     interior = next_state.get("interior")
     if not isinstance(interior, dict):
         raise ActLlmContractError(
@@ -361,61 +359,28 @@ def _apply_host_owned_interior(
         actions_dir=actions_dir,
     )
 
-    overrides: dict[str, int] = {}
-    if policy.is_entry:
-        for key, effect in policy.effects.items():
-            layer = _layer_for_key(key)
-            if key not in contextual[layer]:
-                continue
-            delta = contextual[layer].pop(key)
-            _validate_declared_override(layer, key, delta, effect)
-            overrides[key] = delta
-    else:
-        overlap = proposed_keys.intersection(policy.effects)
-        if overlap:
-            raise ActLlmContractError(
-                "T2.act.llm: same-step/end 不得重提已结算 Action effect，"
-                f"invalid_paths={sorted(_effect_path(key) for key in overlap)}"
-            )
-
-    contextual_keys = {key for layer_diff in contextual.values() for key in layer_diff}
-    if len(contextual_keys) > 2:
-        raise ActLlmContractError(
-            "T2.act.llm: needs/affect 情境 delta 合计最多两项，invalid_paths=['needs','affect']"
-        )
+    low, high = _ENTRY_DELTA_RANGE if policy.is_entry else _CONTINUITY_DELTA_RANGE
+    cadence = "entry" if policy.is_entry else "same-step/end"
     for layer, layer_diff in contextual.items():
         for key, delta in layer_diff.items():
-            if not _CONTEXT_DELTA_RANGE[0] <= abs(delta) <= _CONTEXT_DELTA_RANGE[1]:
+            if not low <= abs(delta) <= high:
                 raise ActLlmContractError(
-                    "T2.act.llm: contextual delta 绝对值必须在 3..10，"
+                    f"T2.act.llm: {cadence} delta 绝对值必须在 {low}..{high}，"
                     f"invalid_paths=['{layer}.{key}']"
                 )
-    for key in sorted(affect_event_touched.intersection(contextual["affect"])):
-        contextual["affect"].pop(key)
-        _warn_state_diff_rejected(
-            path=f"affect.{key}",
-            reason="partner_event_already_applied",
-        )
     contextual_keys = {key for layer_diff in contextual.values() for key in layer_diff}
 
-    if policy.is_entry:
-        for key, effect in policy.effects.items():
-            delta = overrides.get(key, _signed_effect_midpoint(effect))
-            _apply_signed_delta(interior, key, delta)
     for layer, layer_diff in contextual.items():
         for key, delta in layer_diff.items():
             _apply_signed_delta(interior, key, delta, expected_layer=layer)
 
     logger.debug(
-        "T2.act.llm state_authority action_entry=%s action_step=%s "
-        "effect_keys=%s override_keys=%s contextual_keys=%s",
+        "T2.act.llm state_authority action_entry=%s action_step=%s delta_keys=%s",
         policy.is_entry,
         policy.action_step,
-        sorted(policy.effects),
-        sorted(overrides),
         sorted(contextual_keys),
     )
-    return bool((policy.is_entry and policy.effects) or contextual_keys)
+    return bool(contextual_keys)
 
 
 def _resolve_action_policy(
@@ -471,13 +436,12 @@ def _resolve_action_policy(
                 "T2.act.llm: Action 必须唯一匹配当前 activity uses，invalid_paths=['current_state']"
             )
         load_atomic_action(action_step, actions_dir=actions_dir)
-        effects = resolve_step_effects(skill, action_step, actions_dir=actions_dir)
     except ActivitySkillError:
         raise ActLlmContractError(
             "T2.act.llm: 无法解析当前 activity/action package，"
             "invalid_paths=['target_activity','current_state']"
         ) from None
-    return _ActionPolicy(action_step=action_step, is_entry=is_entry, effects=effects)
+    return _ActionPolicy(action_step=action_step, is_entry=is_entry)
 
 
 def _validate_affect_event_touched(value: Any) -> frozenset[str]:
@@ -515,21 +479,6 @@ def _validate_signed_deltas(layer: str, layer_diff: Any) -> dict[str, int]:
     return normalized
 
 
-def _validate_declared_override(
-    layer: str,
-    key: str,
-    delta: int,
-    effect: StateEffect,
-) -> None:
-    sign_matches = (delta > 0) == (effect.direction == "up")
-    low, high = MAGNITUDE_RANGE[effect.magnitude]
-    if not sign_matches or not low <= abs(delta) <= high:
-        raise ActLlmContractError(
-            "T2.act.llm: declared override 必须符合 Action direction/magnitude，"
-            f"invalid_paths=['{layer}.{key}']"
-        )
-
-
 def _apply_signed_delta(
     interior: dict[str, Any],
     key: str,
@@ -550,20 +499,6 @@ def _apply_signed_delta(
             f"got {type(current).__name__}"
         )
     bucket[key] = max(0, min(100, current + delta))
-
-
-def _signed_effect_midpoint(effect: StateEffect) -> int:
-    low, high = MAGNITUDE_RANGE[effect.magnitude]
-    midpoint = (low + high) // 2
-    return midpoint if effect.direction == "up" else -midpoint
-
-
-def _layer_for_key(key: str) -> str:
-    return "needs" if key in _LAYER_KEYS["needs"] else "affect"
-
-
-def _effect_path(key: str) -> str:
-    return f"{_layer_for_key(key)}.{key}"
 
 
 __all__ = [

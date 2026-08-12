@@ -38,6 +38,32 @@ from kindred.resident._seed import build_initial_state, stage_life
 from kindred.state.state import State
 
 
+def read_owned_persona_file(path: Path, *, name: str, optional: bool = False) -> str | None:
+    """Read one workspace Persona file using the OPEN2 ownership contract."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        if optional:
+            return None
+        raise ResidentInitError(f"{name} is unavailable") from None
+    except OSError as exc:
+        raise ResidentInitError(f"{name} is unavailable") from exc
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or not os.access(path, os.R_OK | os.W_OK)
+    ):
+        raise ResidentInitError(f"{name} must be an owned regular file")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ResidentInitError(f"{name} is unavailable") from exc
+    if not text.strip():
+        raise ResidentInitError(f"{name} must not be empty")
+    return text
+
+
 def initialize_resident(
     request: ResidentInitRequest,
     *,
@@ -206,25 +232,10 @@ def _preflight(
         or not os.access(workspace, os.W_OK)
     ):
         raise ResidentInitError("workspace must be canonical and writable")
-    texts: list[str] = []
-    for name in ("SOUL.md", "IDENTITY.md"):
-        path = workspace / name
-        try:
-            info = path.lstat()
-            if (
-                stat.S_ISLNK(info.st_mode)
-                or not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or not os.access(path, os.R_OK | os.W_OK)
-            ):
-                raise ResidentInitError(f"{name} must be an owned regular file")
-            text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ResidentInitError(f"{name} is unavailable") from exc
-        if not text.strip():
-            raise ResidentInitError(f"{name} must not be empty")
-        texts.append(text)
-    return texts[0], texts[1]
+    soul = read_owned_persona_file(workspace / "SOUL.md", name="SOUL.md")
+    identity = read_owned_persona_file(workspace / "IDENTITY.md", name="IDENTITY.md")
+    assert soul is not None and identity is not None
+    return soul, identity
 
 
 def _secrets(request: ResidentInitRequest) -> dict[str, str]:

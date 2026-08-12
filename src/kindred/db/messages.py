@@ -12,9 +12,7 @@ watcher 进程把 main session 的消息历史定时缓存到本地 SQLite，心
 - ``my_voice`` : 嘴（main agent）说的话（watcher 从 protocol 层 assistant 映射）
 - ``my_heart`` : **[legacy]** 旧协议下心（子 agent）自产写表的行
   （旧 ``record_outbound`` 路径）。
-  **Bug2（2026-06-29）退役 record_outbound 后，当前生产路径不再产生 my_heart 行**——心
-  push 改走 inter-session announce、由嘴重表达，落表的是 ``my_voice``。本常量 + 读侧
-  role 映射保留仅为兼容历史数据 / 旧测试，不是当前出向契约。
+  当前生产路径不再产生 my_heart 行。本常量 + 读侧 role 映射只用于读取既有数据。
 
 LLM 协议层仍是 user / assistant；仅在喂模型前由调用方映射回去。
 
@@ -31,9 +29,7 @@ upsert / upsert_many / get_recent / get_since_ms / get_latest /
 get_max_ts_ms / get_max_seq / count / prune。
 
 ``build_from_gateway``（earlier milestone）：chat.history 单条 dict → MainSessionMessage，
-含 toolResult 跳过 / role 映射 / text_summary 压缩 / 心 inter-session push echo
-按 provenance 跳过（Bug2 2026-06-29，见
-docs/discussions/2026-06-29-bug2-heart-push-via-inter-session.md）。
+含 toolResult 跳过 / role 映射 / text_summary 压缩。
 """
 
 from __future__ import annotations
@@ -75,43 +71,6 @@ def protocol_role_to_business(protocol_role: str) -> str:
     本函数不产生 ``my_heart``——它应由心（子 agent）主动写入（earlier milestone）。
     """
     return PROTOCOL_TO_BUSINESS.get(protocol_role, protocol_role)
-
-
-# ─── inter-session provenance（心主动 push 复用 announce 传输）─────────────
-#
-# 心主动 push 走 ``chat.send`` + ``systemInputProvenance{kind:"inter_session",
-# sourceTool:HEART_INTER_SESSION_SOURCE_TOOL}``（= openclaw 子 agent announce 的
-# 同一传输），由嘴跑一轮用自己声音重表达并投递（见
-# docs/discussions/2026-06-29-bug2-heart-push-via-inter-session.md）。
-#
-# 心自己那条触发消息以 **user 角色**回流进 chat.history（provenance 不改 role），
-# 但携带结构化 ``provenance``——:func:`build_from_gateway` 据此跳过它（不入表 →
-# watcher 不会把心自己的话当用户消息自唤醒）。这取代了旧的 text+时间窗 echo 过滤。
-PROVENANCE_KIND_INTER_SESSION: Final[str] = "inter_session"
-HEART_INTER_SESSION_SOURCE_TOOL: Final[str] = "kindred_heart"
-
-
-def _is_heart_inter_session_echo(raw: dict[str, Any]) -> bool:
-    """raw chat.history 消息是否为「心自己的 inter-session 触发消息」回流。
-
-    判据：``role == "user"`` **且**结构化 ``provenance`` 命中（kind=inter_session
-    & sourceTool=kindred_heart）。
-
-    **必须限定 ``role == "user"``**（codex N-1）：心 push 的触发消息恒以 user 角色
-    回流；而嘴重表达后的 **assistant 回复才是唯一真相源（my_voice）**。万一 openclaw
-    把同源 provenance/receipt 也带到 assistant 回复上，绝不能把它跳掉——否则心后续
-    sense 看不到自己（经嘴）说过啥。（text 前缀 ``[Inter-session message]`` 会被
-    display-normalize 剥掉，故只能靠结构化 provenance + role 判定。）
-    """
-    if raw.get("role") != "user":
-        return False
-    prov = raw.get("provenance")
-    if not isinstance(prov, dict):
-        return False
-    return (
-        prov.get("kind") == PROVENANCE_KIND_INTER_SESSION
-        and prov.get("sourceTool") == HEART_INTER_SESSION_SOURCE_TOOL
-    )
 
 
 # ─── model ────────────────────────────────────────────────────────
@@ -675,10 +634,7 @@ def build_from_gateway(
     - ``assistant`` → ``my_voice``
     - 未知 role 原样保留（如 ``system``）。
 
-    跳过规则另含：``role == "toolResult"``，以及**心自己的 inter-session 触发
-    消息回流**（:func:`_is_heart_inter_session_echo`，按结构化 ``provenance`` 判，
-    见 docs/discussions/2026-06-29-bug2-heart-push-via-inter-session.md）——后者
-    取代旧的 text+时间窗 echo 过滤，从源头不入表 → watcher 不自唤醒。
+    跳过规则只有 ``role == "toolResult"`` 和缺少必要 OpenClaw identity 的消息。
 
     Parameters
     ----------
@@ -698,11 +654,6 @@ def build_from_gateway(
     """
     role_protocol = str(raw.get("role") or "unknown")
     if role_protocol == "toolResult":
-        return None
-
-    # 心自己的 inter-session 触发消息（心主动 push 复用 announce 传输）回流：以
-    # user 角色出现但带结构化 provenance。跳过，免得被当 partner 重插→watcher 自唤醒。
-    if _is_heart_inter_session_echo(raw):
         return None
 
     oc = raw.get("__openclaw") or {}

@@ -1,4 +1,5 @@
--- Kindred SQLite schema v5
+-- Kindred SQLite schema v6
+-- v6（Relationship REL1-A）：+ relationship_profile 当前关系权威表
 -- v5（Artifact Visibility ART1A）：+ artifact_commit committed descriptor 读模型
 -- v4（Inventory I0）：+ inventory_items 运行期私有物品名册
 -- v3（L3 PlaceStore）：+ place_visits 表（真实到访事件索引，从 tick.act_result.location_arrival 派生）
@@ -201,6 +202,22 @@ CREATE TABLE IF NOT EXISTS inventory_items (
     kind           TEXT NOT NULL,
     equip_to_json  JSON NOT NULL,
     description    TEXT
+);
+
+-- ─── relationship_profile：State 外的当前关系权威（Relationship REL1-A）──
+
+CREATE TABLE IF NOT EXISTS relationship_profile (
+    subject_key      TEXT PRIMARY KEY,
+    declared_role    TEXT    NOT NULL CHECK (
+        declared_role IN ('unlabeled', 'friend', 'lover', 'hostile')
+    ),
+    trust            INTEGER NOT NULL CHECK (typeof(trust) = 'integer' AND trust BETWEEN 0 AND 100),
+    attachment       INTEGER NOT NULL CHECK (typeof(attachment) = 'integer' AND attachment BETWEEN 0 AND 100),
+    attraction       INTEGER NOT NULL CHECK (typeof(attraction) = 'integer' AND attraction BETWEEN 0 AND 100),
+    friction         INTEGER NOT NULL CHECK (typeof(friction) = 'integer' AND friction BETWEEN 0 AND 100),
+    updated_tick_id  INTEGER CHECK (
+        updated_tick_id IS NULL OR (typeof(updated_tick_id) = 'integer' AND updated_tick_id > 0)
+    )
 );
 
 -- ─── artifact_commit：Host committed Artifact 读模型 ─────────────

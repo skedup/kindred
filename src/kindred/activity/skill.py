@@ -18,8 +18,8 @@
 > 能用一个 **spirit 动画**展示的原子行为 = 原子动作（拍照/化妆/晒太阳/走/吃）；
 > 得靠一串原子动作组合达成的 = 高级意图（explore_food / dine_out）。
 
-**权威设计文档**：``docs/discussions/2026-06-18-atomic-actions.md``。
-``docs/15-activity-skill.md`` 是旧「states[]」协议，已 archived（见该文档顶部）。
+**权威**：结构见 ``2026-06-18-atomic-actions.md``；上文“基准 effect”在 LD4 中仅指通常体验软先验，
+当前 effect 见 ``2026-08-04-experience-appraisal-and-descriptive-interior.md``；docs/15 archived。
 
 本模块只做 **read + 解析 + 校验**；state_effects 生效见 ``resolve_step_effects``，
 状态推进见 ``graph/tick/act_llm.py``。
@@ -52,13 +52,6 @@ Magnitude = Literal["large", "medium", "small"]
 DurationHint = Literal["short", "medium", "long"]
 Produces = Literal["always", "likely", "optional"]
 
-# 档位 → 变化量硬区间（docs/15 §3，skedush 6/08 拍板：「档位描述 + 给到范围」）。
-#
-# 三权分立：方向硬（direction，数据）/ 档位定区间硬边界（magnitude，数据）/
-# 区间内具体值软（心按 engagement+情境+特性染色）。心可在区间内自由染色，但
-# 变化量绝对值不得越界——越了被 clamp_to_magnitude 夹回边界。
-# 护栏哲学：给心染色自由，又不会一口吃成 hunger=0。
-# 详：docs/discussions/2026-06-04-act-llm-diff-schema.md「追加决策（2026-06-08）」。
 MAGNITUDE_RANGE: dict[str, tuple[int, int]] = {
     "large": (25, 40),
     "medium": (10, 25),
@@ -102,7 +95,7 @@ class ActivitySkillError(RuntimeError):
 
 
 class StateEffect(StrictBase):
-    """单个 need/affect 的影响：方向（硬）+ 档位（软基准）。docs/15 §3。"""
+    """单个 need/affect 的通常体验方向与档位软先验。docs/15 §3。"""
 
     direction: Direction
     magnitude: Magnitude
@@ -223,7 +216,7 @@ class ActivitySkill(StrictBase):
 
     activity = 状态机：``uses`` 声明它由哪几个原子动作（状态机节点）组成。
     心在 act 时决定当前处于哪个动作（step ∈ uses 的 action 名）。effect 取值：
-    action baseline + uses[].state_effects override per-key merge + 心区间内染色。
+    action/uses 合并结果只提供通常体验软先验，不约束本次 signed delta。
     ``terminal_when`` 是状态机终止软条件（自然语言，心仲裁何时 end_activity）。
     """
 

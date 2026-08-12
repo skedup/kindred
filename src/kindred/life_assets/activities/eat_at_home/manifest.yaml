@@ -23,6 +23,10 @@ uses:
     intent: 吃下家里已有或已经准备好的食物，让饥饿真正缓下来
     bind_places:
       venue: home_place
+    state_effects:
+      comfort:
+        direction: up
+        magnitude: medium
 terminal_when: |
   在 eat 状态下，已经吃够了或 hunger 明显降下来，就 end_activity。
   任意阶段若发现没有可用食物、无法准备，或此刻不再想吃，也可以如实 end_activity，并说明这顿没有吃成。

@@ -30,13 +30,12 @@ from kindred.openclaw.install import (
     _agents,
     _binding_accounts,
     _command,
-    _inspect_plugin,
     _json,
-    _require_plugin_report,
-    _require_version,
+    require_openclaw_runtime,
 )
 from kindred.openclaw.wire import APPROVED_DM_SCOPE, OpenClawWireError, wire_from_session
-from kindred.resident import require_committed_resident
+from kindred.relationship.preflight import require_user_relationship
+from kindred.resident import read_owned_persona_file, require_committed_resident
 from kindred.runtime import platform_service
 from kindred_capability_sdk import ToolCall, ToolDef, ToolResult
 
@@ -180,13 +179,21 @@ def _resident_runtime(context: _Context) -> tuple[Status, str]:
         workspace = config.resident.workspace
         if workspace is None:
             raise ValueError
-        files = (
-            *(workspace / name for name in ("SOUL.md", "IDENTITY.md", "USER.md")),
-            config.paths.soul_excerpt,
-            config.paths.character_card,
-            config.paths.db,
-        )
-        if any(not path.is_file() or not os.access(path, os.R_OK | os.W_OK) for path in files):
+        if (
+            config.paths.soul_full != workspace / "SOUL.md"
+            or config.paths.identity != workspace / "IDENTITY.md"
+            or config.paths.user != workspace / "USER.md"
+            or config.paths.soul_excerpt != workspace / "SOUL_excerpt.md"
+        ):
+            raise ValueError
+        read_owned_persona_file(config.paths.soul_full, name="SOUL.md")
+        read_owned_persona_file(config.paths.identity, name="IDENTITY.md")
+        read_owned_persona_file(config.paths.user, name="USER.md", optional=True)
+        read_owned_persona_file(config.paths.soul_excerpt, name="SOUL_excerpt.md")
+        if any(
+            not path.is_file() or not os.access(path, os.R_OK | os.W_OK)
+            for path in (config.paths.character_card, config.paths.db)
+        ):
             raise ValueError
         if any(
             not path.is_dir() or not os.access(path, os.W_OK)
@@ -195,23 +202,24 @@ def _resident_runtime(context: _Context) -> tuple[Status, str]:
             raise ValueError
         with KindredDB.open_readonly(config.paths.db) as db:
             db.count_inventory_items()
+            require_user_relationship(db)
     except Exception as exc:
-        raise _Fail("Resident、Persona、DB、Catalog 或运行目录不完整") from exc
+        raise _Fail("Resident、Persona、DB、Catalog、Relationship 或运行目录不完整") from exc
     bundle = config.paths.context_bundle
     if not bundle.exists():
         return "warning", "context bundle 尚未由首个 tick 生成"
     if not bundle.is_file() or not os.access(bundle, os.R_OK):
         raise _Fail("context bundle 类型或读取边界无效")
-    return "ok", "Resident、Persona、DB、Catalog 与 bundle 边界正常"
+    return "ok", "Resident、Persona、DB、Catalog、Relationship 与 bundle 边界正常"
 
 
 def _openclaw_local(context: _Context) -> tuple[Status, str]:
     config = _cfg(context)
     try:
-        _require_version()
+        require_openclaw_runtime(config, home=context.home)
         agents = _agents()
     except Exception as exc:
-        raise _Fail("OpenClaw CLI 版本、build 或 agent schema 不受支持") from exc
+        raise _Fail("OpenClaw Plugin/binding 不一致；请重新运行 kindred openclaw install") from exc
     if not any(
         agent.agent_id == config.resident.agent_id and agent.workspace == config.resident.workspace
         for agent in agents
@@ -226,10 +234,6 @@ def _openclaw_local(context: _Context) -> tuple[Status, str]:
     peer = wire.approved_peer
     if (peer.provider, peer.account_id) not in _binding_accounts(config.resident.agent_id):
         raise _Fail("OpenClaw binding account 与 approved peer 不一致")
-    try:
-        require_openclaw_binding(config, home=context.home)
-    except Exception as exc:
-        raise _Fail("Mouth binding 缺失、损坏或摘要不一致") from exc
     _gateway(config)
     _check_plugin()
     if _agent_verbose_default(config.resident.agent_id) != "off":
@@ -239,10 +243,9 @@ def _openclaw_local(context: _Context) -> tuple[Status, str]:
 
 def _check_plugin() -> None:
     try:
-        _require_plugin_report(_inspect_plugin(), require_prompt_injection=True)
         _command(["openclaw", "plugins", "doctor"])
     except Exception as exc:
-        raise _Fail("Mouth Plugin 版本、内容、hook 或 policy 漂移") from exc
+        raise _Fail("OpenClaw Plugin doctor 未通过") from exc
 
 
 def _life_assets() -> str:
@@ -405,10 +408,23 @@ def _online_gateway(context: _Context) -> tuple[Status, str]:
     history = gateway.fetch_chat_history(wire.transcript_session, limit=1)
     if "error" in history:
         raise _gateway_fail(history["error"])
+    binding = require_openclaw_binding(config, home=context.home)
+    session_id = history.get("sessionId")
+    if (
+        binding is None
+        or history.get("ok") is not True
+        or history.get("sessionKey") != wire.transcript_session
+        or history.get("sessionInfoKey") != wire.transcript_session
+        or not isinstance(session_id, str)
+        or not session_id.strip()
+        or session_id != session_id.strip()
+        or len(session_id) > 512
+    ):
+        raise _Fail("Gateway history 与 Mouth 稳定会话身份不一致；请重跑 install")
     history.pop("messages", None)
     if verbose in ("on", "full"):
         return "warning", "approved session 显式开启工具调用展示；请在会话执行 /verbose off"
-    return "ok", "Gateway auth、session 分页与只读 history identity 正常"
+    return "ok", "Gateway auth、session 分页与当前 transcript 世代正常"
 
 
 def _online_llm(context: _Context) -> str:

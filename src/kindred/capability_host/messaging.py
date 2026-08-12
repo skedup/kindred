@@ -29,7 +29,7 @@ class HostUserMessenger:
                 },
             )
         try:
-            self.bridge.send_to_user(text)
+            self.bridge.send_to_user(text, artifact_ref=artifact_ref)
         except IOBridgeError as exc:
             if exc.unknown_side_effect:
                 raise

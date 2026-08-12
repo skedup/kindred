@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,7 +18,7 @@ class OpenClawBindingError(RuntimeError):
 
 
 def binding_payload(config: KindredConfig) -> dict[str, Any]:
-    """从私有 wire 生成不含完整 session/route/target 的 Plugin 摘要。"""
+    """从私有 wire 生成稳定的 Plugin 授权 binding。"""
     resident, wire = config.resident, config.openclaw
     if (
         wire is None
@@ -28,11 +29,11 @@ def binding_payload(config: KindredConfig) -> dict[str, Any]:
     ):
         raise OpenClawBindingError("Resident or OpenClaw wire is incomplete")
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "install_id": resident.install_id,
         "agent_id": resident.agent_id,
         "workspace_digest": _digest(str(resident.workspace)),
-        "transcript_session_digest": _digest(wire.transcript_session),
+        "session_key": wire.transcript_session,
         "peer_scope": {
             "message_provider": wire.approved_peer.provider,
             "channel_id_digest": _digest(wire.approved_peer.target),
@@ -42,16 +43,25 @@ def binding_payload(config: KindredConfig) -> dict[str, Any]:
     }
 
 
-def require_openclaw_binding(config: KindredConfig, *, home: Path | None = None) -> None:
+def require_openclaw_binding(
+    config: KindredConfig, *, home: Path | None = None
+) -> dict[str, Any] | None:
     """Config 已含 wire 时，固定 binding 与 Resident marker 必须 exact match。"""
     if config.openclaw is None:
-        return
+        return None
     path = (home or Path.home()) / ".config/kindred/openclaw-binding.json"
     try:
         info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & (stat.S_IRWXG | stat.S_IRWXO)
+        ):
             raise ValueError
         actual = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(actual, Mapping):
+            raise ValueError
         expected = binding_payload(config)
         marker = json.loads(Path(expected["resident_marker_path"]).read_text(encoding="utf-8"))
         valid = (
@@ -59,10 +69,11 @@ def require_openclaw_binding(config: KindredConfig, *, home: Path | None = None)
             and isinstance(marker, Mapping)
             and marker.get("install_id") == expected["install_id"]
         )
-    except (OSError, TypeError, ValueError) as exc:
+    except (KeyError, OSError, TypeError, ValueError) as exc:
         raise OpenClawBindingError("OpenClaw Mouth binding is missing or inconsistent") from exc
     if not valid:
         raise OpenClawBindingError("OpenClaw Mouth binding is missing or inconsistent")
+    return dict(actual)
 
 
 def _digest(value: str) -> str:

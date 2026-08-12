@@ -5,8 +5,8 @@
 职责（五段 jinja2 prompt + L2 read）
 ===================================
 
-调 LLM 出 ``note`` / ``significance`` / ``act_decision`` + 应用 ``thought_diff``
-+ 主观调 mood，prompt 走 jinja2 模板（``llm/prompts/sense_user.md.j2``）渲染。
+调 LLM 出 ``note`` / ``significance`` / ``act_decision`` + 应用 ``thought_diff``，
+prompt 走 jinja2 模板（``llm/prompts/sense_user.md.j2``）渲染。
 
 **L2 节点本地 read**（read 完渲染进 prompt 即丢，不进 TickState）：
 
@@ -42,13 +42,12 @@ LLM 返 dict 形如::
             "add": list[dict],
             "remove": list[str],
         },
-        "mood_subjective": int,      # full int 0~100，覆写 next_state.interior.mood.value
         "ambience": str,             # 主观氛围，覆写 next_state.environment.ambience
         "observed_user_present": bool | None,
     }
 
-mood_subjective 语义符合 14 §3.3：LLM 主观调 mood，**覆写** derive 算出的客观值
-（非 delta 累加）。
+Thought、Needs 与 Affect 是 mood 的 canonical 输入；本节点应用本拍变化后由 Host
+统一重派 Layer 1，不接受 LLM 直接提交绝对 mood。
 """
 
 from __future__ import annotations
@@ -82,16 +81,28 @@ from kindred.graph._shared._common import (
     validate_act_decision,
 )
 from kindred.graph._shared._errors import NodeContractError
-from kindred.graph.tick._action_result_grade import build_action_result_grade
 from kindred.graph.tick._affect_event import (
     AffectEventProjectionError,
     apply_affect_event_response,
 )
 from kindred.graph.tick._possession_narrative import render_current_possession_facts
 from kindred.graph.tick._thought_diff import apply_thought_diff
-from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
+from kindred.life_assets import ACTIVITIES_DIR
 from kindred.llm.schemas import SenseResponse
 from kindred.llm.templates import render_prompt
+from kindred.relationship import render_relationship_summary
+from kindred.relationship.models import (
+    RelationshipFacetProposal,
+    RelationshipProfile,
+    RelationshipRoleEvent,
+)
+from kindred.relationship.projector import (
+    RelationshipEvidenceContext,
+    project_relationship_change,
+    project_relationship_evidence,
+)
+from kindred.state._derive import rederive_layer1
+from kindred.state._types import is_safe_name
 from kindred.state.state import State
 from kindred.state.tick import RecentContactContext, TickState
 
@@ -101,6 +112,7 @@ if TYPE_CHECKING:
     from kindred.db.facade import KindredDB
     from kindred.llm.client import LlmClient
     from kindred.observability import PromptDumper
+    from kindred.relationship.preflight import RelationshipReader
 
 _LOG = logging.getLogger(__name__)
 
@@ -117,6 +129,10 @@ class SenseLlmContractError(NodeContractError):
 
 # sense user prompt 模板（共享加载器，llm/templates.py）
 _SENSE_USER_TEMPLATE = "sense_user.md.j2"
+
+_LIFE_TEXTURE_HEADER = (
+    "近期生活纹理（过去事实，不是完成证明、配额或建议；重复、新意图和安静不行动都合法）："
+)
 
 _ENVIRONMENT_LEADING_FIELDS: Final[tuple[str, ...]] = (
     "city",
@@ -221,13 +237,13 @@ def make_sense_llm_node(
     *,
     recent_ticks_limit: int = 5,
     activities_dir: Path = ACTIVITIES_DIR,
-    actions_dir: Path = ACTIONS_DIR,
     soul_excerpt_path: Path = DEFAULT_SOUL_EXCERPT_PATH,
     soul_full_path: Path = DEFAULT_SOUL_FULL_PATH,
     identity_path: Path = DEFAULT_IDENTITY_PATH,
     user_path: Path = DEFAULT_USER_PATH,
     highlights_path: Path = DEFAULT_BUNDLE_HIGHLIGHTS_PATH,
     prompt_dumper: PromptDumper | None = None,
+    relationship_reader: RelationshipReader | None = None,
 ) -> Callable[[TickState], NodeReturn]:
     """构造 T1.sense.llm closure。
 
@@ -250,13 +266,13 @@ def make_sense_llm_node(
         db,
         recent_ticks_limit=recent_ticks_limit,
         activities_dir=activities_dir,
-        actions_dir=actions_dir,
         soul_excerpt_path=soul_excerpt_path,
         soul_full_path=soul_full_path,
         identity_path=identity_path,
         user_path=user_path,
         highlights_path=highlights_path,
         prompt_dumper=prompt_dumper,
+        relationship_reader=relationship_reader,
     )
 
 
@@ -272,13 +288,13 @@ def _t1_sense_llm_impl(
     db: KindredDB | None = None,
     recent_ticks_limit: int = 5,
     activities_dir: Path = ACTIVITIES_DIR,
-    actions_dir: Path = ACTIONS_DIR,
     soul_excerpt_path: Path = DEFAULT_SOUL_EXCERPT_PATH,
     soul_full_path: Path = DEFAULT_SOUL_FULL_PATH,
     identity_path: Path = DEFAULT_IDENTITY_PATH,
     user_path: Path = DEFAULT_USER_PATH,
     highlights_path: Path = DEFAULT_BUNDLE_HIGHLIGHTS_PATH,
     prompt_dumper: PromptDumper | None = None,
+    relationship_reader: RelationshipReader | None = None,
 ) -> NodeReturn:
     """T1.sense.llm 真实现。
 
@@ -290,7 +306,7 @@ def _t1_sense_llm_impl(
     3. ``validate_act_decision(out["act_decision"])`` raise on bad schema
     4. 应用到 ``next_state.interior`` / ``next_state.environment``：
        - ``thoughts = apply_thought_diff(prev_thoughts, diff)``
-       - ``mood.value = mood_subjective``（覆写，clamp 0~100 防御）
+       - 从最终 Needs/Affect/Thought 统一重派 Layer 1
        - ``environment.ambience = ambience``（主观氛围）
     5. 返 patch::
 
@@ -329,9 +345,28 @@ def _t1_sense_llm_impl(
     is_cold_start = state.get("trigger_source") == "cold_start"
     limit = 20 if is_cold_start else recent_ticks_limit
     recent_ticks = db.get_recent_ticks(limit=limit) if db is not None else []
+    recent_activity_rows: list[dict[str, Any]] = []
+    time_raw = next_state.get("time")
+    now_iso = _as_str_or_none(time_raw.get("iso")) if isinstance(time_raw, dict) else None
+    if db is not None and now_iso is not None:
+        try:
+            datetime.fromisoformat(now_iso)
+            recent_activity_rows = db.get_recent_activity_rows(until=now_iso)
+        except Exception as exc:  # noqa: BLE001 - 独立 L2 read 失败只降级本段
+            _LOG.warning("recent life texture unavailable error_type=%s", type(exc).__name__)
     chat_projection = _project_chat_window(
         state.get("chat_window"),
         triggered_at=_as_str_or_none(state.get("triggered_at")),
+    )
+    relationship_profile = _read_relationship_profile(relationship_reader, node="T1.sense.llm")
+    relationship_summary = (
+        render_relationship_summary(relationship_profile)
+        if relationship_profile is not None
+        else ""
+    )
+    relationship_evidence = project_relationship_evidence(
+        chat_projection.partner_lines,
+        recent_ticks[0] if recent_ticks else None,
     )
     _LOG.debug(
         "T1.sense.llm start cold_start=%s recent_ticks_count=%d trigger_source=%s",
@@ -343,8 +378,8 @@ def _t1_sense_llm_impl(
         state,
         next_state,
         recent_ticks=recent_ticks,
+        recent_activity_rows=recent_activity_rows,
         activities_dir=activities_dir,
-        actions_dir=actions_dir,
         is_cold_start=is_cold_start,
         soul_excerpt_path=soul_excerpt_path,
         soul_full_path=soul_full_path,
@@ -352,6 +387,8 @@ def _t1_sense_llm_impl(
         user_path=user_path,
         highlights_path=highlights_path,
         chat_projection=chat_projection,
+        relationship_summary=relationship_summary,
+        relationship_evidence=(relationship_evidence if relationship_profile is not None else None),
     )
 
     # ─── 2. 调 LLM（mock 或 真）────────────────────────────────
@@ -380,18 +417,16 @@ def _t1_sense_llm_impl(
 
     # ─── 3. validate 真 LLM 返回 schema（顶层门收完整）────
     # _validate_sense_response 一次性校 note/significance/act_decision/
-    # mood_subjective/thought_diff 的顶层存在+类型+范围——避免真 LLM 缺字段裸
+    # thought_diff 的顶层存在+类型——避免真 LLM 缺字段裸
     # KeyError 逃出 NodeContractError 谱系。
     observed_status = _observed_user_present_status(out)
     affect_event_status = _affect_event_response_status(out)
+    relationship_proposal_status = _relationship_proposal_status(out)
     out = _validate_sense_response(out)
     if not _has_current_partner_input(chat_projection):
         if out["observed_user_present"] is not None:
             observed_status = "normalized"
         out["observed_user_present"] = None
-        if out["affect_event_response"]:
-            affect_event_status = "normalized"
-        out["affect_event_response"] = {}
     if prompt_dumper is not None:
         prompt_dumper.dump(
             role="sense.llm",
@@ -403,10 +438,27 @@ def _t1_sense_llm_impl(
     act_decision_dict = out["act_decision"]
     note = out["note"]
     significance = out["significance"]
-    mood_subjective = out["mood_subjective"]
     ambience = out["ambience"]
     observed_user_present = out["observed_user_present"]
     affect_event_response = out["affect_event_response"]
+    relationship_proposals = [
+        RelationshipFacetProposal.model_validate(item) for item in out["relationship_changes"]
+    ]
+    relationship_role_event = (
+        RelationshipRoleEvent.model_validate(out["relationship_role_event"])
+        if out["relationship_role_event"] is not None
+        else None
+    )
+    relationship_change = (
+        project_relationship_change(
+            relationship_profile,
+            relationship_evidence,
+            relationship_proposals,
+            relationship_role_event,
+        )
+        if relationship_profile is not None
+        else None
+    )
 
     # act_decision 内部结构细校（顶层 dict 门已在上面过）。
     # pydantic ValidationError 包装为 SenseLlmContractError。
@@ -414,6 +466,20 @@ def _t1_sense_llm_impl(
         validate_act_decision(act_decision_dict)  # raise on bad
     except ValidationError as exc:
         raise SenseLlmContractError(f"T1.sense.llm: act_decision schema invalid: {exc}") from exc
+
+    kind = act_decision_dict.get("kind")
+    if kind in {"advance_activity", "end_activity"}:
+        current = next_state.get("activity")
+        current_name = current.get("name") if isinstance(current, dict) else None
+        current_step = current.get("step") if isinstance(current, dict) else None
+        if (
+            not isinstance(current_name, str)
+            or current_step == "settle"
+            or act_decision_dict.get("target_activity") != current_name
+        ):
+            raise SenseLlmContractError(
+                "T1.sense.llm: act_decision kind/target_activity 与当前 Activity 生命周期冲突",
+            )
 
     # ─── 3b. target_activity 注册表闭集硬门 ──────
     # prompt 约束（_render_activity_choices）只降低模型犯错概率，不堵死——真模型
@@ -461,15 +527,10 @@ def _t1_sense_llm_impl(
             f"T1.sense.llm: thought_diff 应用失败（{type(exc).__name__}）：{exc}",
         ) from exc
 
-    # 4b. mood.value = mood_subjective（覆写主观值，范围已在 helper 校过）
-    # 14 §3.3：LLM 输出 mood_subjective 是 full int 不是 delta；客观 derive 在
-    # T1.sense.derive 已先行计算，sense.llm 在此覆写体现主观调整。
-    mood = _require_mood(interior)
-    mood["value"] = mood_subjective
-    # 4c. ambience = 心的主观处境感。EnvironmentProvider 只产天气等被给予事实；
+    # 4b. ambience = 心的主观处境感。EnvironmentProvider 只产天气等被给予事实；
     # 氛围不是 Provider 事实，必须由 sense.llm 结合地点/天气/时间/内在状态主动刷新。
     environment["ambience"] = ambience
-    # 4d. Host 从可空物理事实派生 Presence 迁移，并在 T1 私有 working state 上投影。完整 State
+    # 4c. Host 从可空物理事实派生 Presence 迁移，并在 T1 私有 working state 上投影。完整 State
     # 校验成功后才把实际改变的层放进 patch；失败时不会返回半成品。
     next_state, presence_touched, presence_observation = _apply_observed_user_present(
         next_state,
@@ -489,20 +550,22 @@ def _t1_sense_llm_impl(
         raise SenseLlmContractError(
             f"T1.sense.llm: Affect event response 投影失败，reason={exc}",
         ) from None
+    next_state = _rederive_final_layer1(next_state)
     _LOG.debug(
         "T1.sense.llm done cold_start=%s recent_ticks_count=%d act=%s kind=%s "
-        "target=%s significance=%s mood_subjective=%s thought_diff_add=%d "
+        "target=%s significance=%s thought_diff_add=%d "
         "thought_diff_remove=%d partner_input_count=%d mouth_context_count=%d "
         "partner_input_max_age_s=%s observed_user_present_status=%s "
         "observed_user_present=%s presence_observation=%s presence_touched=%s "
-        "affect_event_status=%s affect_event_keys=%s affect_event_touched=%s elapsed_ms=%.1f",
+        "affect_event_status=%s affect_event_keys=%s affect_event_touched=%s "
+        "relationship_proposal_status=%s relationship_change_present=%s "
+        "relationship_role_touched=%s relationship_facet_keys=%s elapsed_ms=%.1f",
         is_cold_start,
         len(recent_ticks),
         act_decision_dict.get("act"),
         act_decision_dict.get("kind"),
         act_decision_dict.get("target_activity"),
         significance,
-        mood_subjective,
         _diff_count(diff, "add"),
         _diff_count(diff, "remove"),
         len(chat_projection.partner_lines),
@@ -515,6 +578,16 @@ def _t1_sense_llm_impl(
         affect_event_status,
         sorted(affect_event_response),
         sorted(affect_event_touched),
+        (
+            "ignored_no_evidence"
+            if not relationship_evidence.available
+            else relationship_proposal_status
+        ),
+        relationship_change is not None,
+        relationship_change is not None and relationship_change.target_role is not None,
+        sorted(facet for facet, _ in relationship_change.facet_deltas)
+        if relationship_change is not None
+        else [],
         (time.perf_counter() - started) * 1000,
     )
 
@@ -526,13 +599,16 @@ def _t1_sense_llm_impl(
     }
     for layer in presence_touched:
         next_state_patch[layer] = next_state[layer]
-    return {
+    patch: NodeReturn = {
         "next_state": next_state_patch,
         "note": note,
         "significance": significance,
         "act_decision": act_decision_dict,
         "affect_event_touched": sorted(affect_event_touched),
     }
+    if relationship_change is not None:
+        patch["relationship_change"] = relationship_change
+    return patch
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -545,8 +621,8 @@ def _render_sense_prompt(
     next_state: dict[str, Any],
     *,
     recent_ticks: list[dict[str, Any]] | None = None,
+    recent_activity_rows: list[dict[str, Any]] | None = None,
     activities_dir: Path = ACTIVITIES_DIR,
-    actions_dir: Path = ACTIONS_DIR,
     is_cold_start: bool = False,
     soul_excerpt_path: Path = DEFAULT_SOUL_EXCERPT_PATH,
     soul_full_path: Path = DEFAULT_SOUL_FULL_PATH,
@@ -554,6 +630,8 @@ def _render_sense_prompt(
     user_path: Path = DEFAULT_USER_PATH,
     highlights_path: Path = DEFAULT_BUNDLE_HIGHLIGHTS_PATH,
     chat_projection: _ChatProjection | None = None,
+    relationship_summary: str = "",
+    relationship_evidence: RelationshipEvidenceContext | None = None,
 ) -> str:
     """渲染 sense.llm 的 user prompt（jinja2 五段，docs/14 §3.3）。
 
@@ -614,19 +692,21 @@ def _render_sense_prompt(
     possession_facts_section = render_current_possession_facts(next_state)
     last_note_line = _render_last_note(recent_ticks or [])
     traj_line = _render_recent_ticks(recent_ticks or [])
+    life_texture_line = _render_recent_life_texture(
+        recent_activity_rows or [], current_activity=next_state.get("activity")
+    )
     stuck_warning_line = _render_stuck_warning(recent_ticks or [])
     activities_line = _render_activity_choices(activities_dir)
+    show_current_activity = _should_render_current_activity(next_state, recent_ticks or [])
     current_activity_line = (
-        _render_current_activity(next_state, activities_dir)
-        if _should_render_current_activity(next_state, recent_ticks or [])
+        _render_current_activity(next_state, activities_dir) if show_current_activity else ""
+    )
+    settled_activity_exit_line = (
+        "上一程已经结束并从当前生活内容中退场；现在要做候选清单里的另一件事时，"
+        "使用 start_activity，否则 act=false。"
+        if not show_current_activity
         else ""
     )
-    grade_status, grade_step, grade, grade_prompt, fact_kinds = build_action_result_grade(
-        recent_ticks or [],
-        activities_dir=activities_dir,
-        actions_dir=actions_dir,
-    )
-
     # L2 节点本地 read——read 完渲染进 prompt 即丢，不进 TickState。
     soul_excerpt = _read_soul_excerpt(
         is_cold_start=is_cold_start,
@@ -642,25 +722,19 @@ def _render_sense_prompt(
 
     _LOG.debug(
         "prompt_sections role=sense.llm skill_catalog_chars=%d reason=activity_selection "
-        "current_activity_chars=%d current_reason=continue_end_switch phase_context_chars=%d "
+        "current_activity_chars=%d current_reason=continue_end_switch life_texture_chars=%d "
+        "relationship_context_chars=%d relationship_reason=user_tone_only "
+        "phase_context_chars=%d "
         "phase_scope=situation_partner_mouth phase_reason=sense_tick",
         len(activities_line),
         len(current_activity_line) + len(stuck_warning_line),
+        len(life_texture_line),
+        len(relationship_summary),
         len(situation_block)
         + len(possession_facts_section)
         + len(current_partner_input)
         + len(mouth_context),
     )
-    _LOG.debug(
-        "result_grade_status=%s action_step=%s grade=%s action_summary_chars=%d "
-        "structured_fact_kinds=%s",
-        grade_status,
-        grade_step,
-        grade,
-        len(grade_prompt),
-        list(fact_kinds),
-    )
-
     return render_prompt(
         _SENSE_USER_TEMPLATE,
         soul_excerpt=soul_excerpt,
@@ -679,16 +753,61 @@ def _render_sense_prompt(
         thoughts_line=thoughts_line,
         last_note_line=last_note_line,
         current_partner_input=current_partner_input,
+        relationship_summary=relationship_summary,
+        relationship_evaluation_enabled=(
+            relationship_evidence is not None and relationship_evidence.available
+        ),
+        relationship_previous_experience=(
+            relationship_evidence.previous_experience if relationship_evidence is not None else ""
+        ),
         mouth_context=mouth_context,
         unknown_chat_context=unknown_chat_context,
         presence_before_line=_render_presence_before(next_state),
         recent_contact_line=recent_contact_line,
         traj_line=traj_line,
-        action_result_grade_line=grade_prompt,
+        life_texture_line=life_texture_line,
         stuck_warning_line=stuck_warning_line,
         activities_line=activities_line,
         current_activity_line=current_activity_line,
+        settled_activity_exit_line=settled_activity_exit_line,
     )
+
+
+def _render_recent_life_texture(rows: list[dict[str, Any]], *, current_activity: object) -> str:
+    """把 newest-first Activity 行折叠为 oldest-first 的近期非当前 run。"""
+    active_identity: tuple[str, str] | None = None
+    if isinstance(current_activity, dict) and current_activity.get("step") != "settle":
+        name = current_activity.get("name")
+        started_at = current_activity.get("started_at")
+        if isinstance(name, str) and isinstance(started_at, str):
+            active_identity = (name, started_at)
+
+    seen: set[tuple[str, str]] = set()
+    newest_names: list[str] = []
+    for row in rows:
+        activity = row.get("activity") if isinstance(row, dict) else None
+        if not isinstance(activity, dict):
+            continue
+        name = activity.get("name")
+        started_at = activity.get("started_at")
+        if (
+            not isinstance(name, str)
+            or len(name) > 64
+            or not is_safe_name(name)
+            or not isinstance(started_at, str)
+        ):
+            continue
+        identity = (name, started_at)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if identity == active_identity:
+            continue
+        newest_names.append(name)
+        if len(newest_names) == 6:
+            break
+
+    return f"{_LIFE_TEXTURE_HEADER}\n{' → '.join(reversed(newest_names))}" if newest_names else ""
 
 
 def _render_recent_contact(raw: object) -> str:
@@ -1042,8 +1161,9 @@ def _render_stuck_warning(recent_ticks: list[dict[str, Any]]) -> str:
         return (
             f"🧭 在路上提醒：你已经连续 {streak} 个心跳停在 {name}{step_part}"
             f"（去「{dest_part}」的路上）。路上花时间不算卡住；但按现实节奏想想——\n"
-            "  如果早该走到了，就继续 advance，让行动侧真实到达落地（到店那拍才算到）；"
-            "确实不想去了，也继续 advance 并在行动侧放弃这个目的地，别永远「在路上」。"
+            "  系统不会另发外部到达信号。仍愿意前往就选择 advance，让行动侧依据目的地计划、"
+            "在途时长和已有处境判断本拍应 arrive 还是继续移动；不想去了也选择 advance，"
+            "由行动侧 abandon。这里不要预先宣告已经到达，也别永远等待信号。"
         )
     return (
         f"⚠️ 原地打转警告：你已经连续 {streak} 个心跳停在 {name}{step_part}，"
@@ -1375,20 +1495,6 @@ def _require_environment(next_state: dict[str, Any]) -> dict[str, Any]:
     return environment
 
 
-def _require_mood(interior: dict[str, Any]) -> dict[str, Any]:
-    mood = interior.get("mood")
-    if not isinstance(mood, dict):
-        raise SenseLlmContractError(
-            f"T1.sense.llm: interior.mood must be dict (GaugeWithDescription), "
-            f"got {type(mood).__name__}",
-        )
-    if "value" not in mood or not isinstance(mood["value"], int):
-        raise SenseLlmContractError(
-            "T1.sense.llm: interior.mood.value must be int (0~100)",
-        )
-    return mood
-
-
 def _diff_count(diff: object, key: str) -> int:
     if not isinstance(diff, dict):
         return 0
@@ -1451,6 +1557,21 @@ def _safe_schema_paths(exc: ValidationError) -> list[str]:
     return sorted(paths)
 
 
+def _rederive_final_layer1(next_state: dict[str, Any]) -> dict[str, Any]:
+    """从本拍最终 lower layers 重派 Layer 1，并只在完整 State 合法时返回。"""
+    try:
+        working = State.model_validate(deepcopy(next_state))
+        working = working.model_copy(
+            update={"interior": rederive_layer1(working.interior)},
+        )
+        return State.model_validate(working).model_dump()
+    except ValidationError as exc:
+        raise SenseLlmContractError(
+            "T1.sense.llm: Layer 1 重派后完整 State 校验失败，"
+            f"invalid_paths={_safe_schema_paths(exc)}",
+        ) from None
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Factory thin wrapper
 # ─────────────────────────────────────────────────────────────────────
@@ -1486,6 +1607,14 @@ def _validate_sense_response(out: object) -> dict[str, Any]:
     normalized = dict(out)
     normalized["observed_user_present"] = validated.observed_user_present
     normalized["affect_event_response"] = validated.affect_event_response
+    normalized["relationship_changes"] = [
+        item.model_dump(mode="json") for item in validated.relationship_changes or []
+    ]
+    normalized["relationship_role_event"] = (
+        validated.relationship_role_event.model_dump(mode="json")
+        if validated.relationship_role_event is not None
+        else None
+    )
     return normalized
 
 
@@ -1511,19 +1640,49 @@ def _affect_event_response_status(out: object) -> str:
     return "explicit" if out["affect_event_response"] == validated else "normalized"
 
 
+def _relationship_proposal_status(out: object) -> str:
+    if not isinstance(out, dict) or not {
+        "relationship_changes",
+        "relationship_role_event",
+    }.intersection(out):
+        return "missing"
+    candidate = dict(out)
+    candidate.setdefault("observed_user_present", None)
+    candidate.setdefault("affect_event_response", {})
+    try:
+        validated = SenseResponse.model_validate(candidate)
+    except ValidationError:
+        return "normalized"
+    raw_changes = out.get("relationship_changes")
+    normalized_changes = [
+        item.model_dump(mode="json") for item in validated.relationship_changes or []
+    ]
+    if raw_changes is not None and raw_changes != normalized_changes:
+        return "normalized"
+    raw_role = out.get("relationship_role_event")
+    normalized_role = (
+        validated.relationship_role_event.model_dump(mode="json")
+        if validated.relationship_role_event is not None
+        else None
+    )
+    if raw_role is not None and raw_role != normalized_role:
+        return "normalized"
+    return "explicit"
+
+
 def _make_t1_sense_llm(
     client: LlmClient,
     db: KindredDB | None = None,
     *,
     recent_ticks_limit: int = 5,
     activities_dir: Path = ACTIVITIES_DIR,
-    actions_dir: Path = ACTIONS_DIR,
     soul_excerpt_path: Path = DEFAULT_SOUL_EXCERPT_PATH,
     soul_full_path: Path = DEFAULT_SOUL_FULL_PATH,
     identity_path: Path = DEFAULT_IDENTITY_PATH,
     user_path: Path = DEFAULT_USER_PATH,
     highlights_path: Path = DEFAULT_BUNDLE_HIGHLIGHTS_PATH,
     prompt_dumper: PromptDumper | None = None,
+    relationship_reader: RelationshipReader | None = None,
 ) -> Callable[[TickState], NodeReturn]:
     """绑 client (+ 可选 db / activities_dir / L2 路径) 返回 closure（LangGraph add_node 接口）。"""
 
@@ -1534,16 +1693,32 @@ def _make_t1_sense_llm(
             db=db,
             recent_ticks_limit=recent_ticks_limit,
             activities_dir=activities_dir,
-            actions_dir=actions_dir,
             soul_excerpt_path=soul_excerpt_path,
             soul_full_path=soul_full_path,
             identity_path=identity_path,
             user_path=user_path,
             highlights_path=highlights_path,
             prompt_dumper=prompt_dumper,
+            relationship_reader=relationship_reader,
         )
 
     return t1_sense_llm_closure
+
+
+def _read_relationship_profile(
+    reader: RelationshipReader | None, *, node: str
+) -> RelationshipProfile | None:
+    if reader is None:
+        return None
+    from kindred.relationship.preflight import (
+        RelationshipPreflightError,
+        require_user_relationship,
+    )
+
+    try:
+        return require_user_relationship(reader)
+    except RelationshipPreflightError as exc:
+        raise SenseLlmContractError(f"{node}: {exc}") from None
 
 
 # ─────────────────────────────────────────────────────────────────────

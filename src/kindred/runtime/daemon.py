@@ -10,8 +10,8 @@ MessageWatcher + 清晨做梦调度）。本文件随 D 系列逐刀长出，当
 - ``MessageWatcher``：你说话→心感知（表新 partner 行 fire watcher tick，earlier milestone）
 - ``HistorySync``：每轮 watcher poll 前拉 chat.history 进表
   （token 未配降级 None）
-- ``IOBridge`` / 心主动 push：act 工具环调用 send_to_user → 经 ws 走 inter-session
-  announce 传输发给嘴（嘴重表达投递；token 未配降级 None，earlier milestone / Bug2 2026-06-29）
+- ``IOBridge`` / 心主动 push：act 工具环调用 send_to_user → core direct send 原文投递，
+  再 best-effort 提交 Mouth hidden context（token 未配降级 None）
 - 清晨做梦接入（D6.8b）：主循环 while 顶调 ``should_dream(wall_now, index_path)``
   （幂等补偿，``kindred.graph.dream._schedule``），命中则 invoke dream_graph
   （装配入口 ``runtime.dream_graph.build_client_dream_graph``，D6.7）后 continue
@@ -290,7 +290,7 @@ class HeartDaemon:
             )
             return None
         logger.info("heart push enabled for verified direct peer")
-        return IOBridge(client, wire=wire)
+        return IOBridge(client, wire=wire, agent_id=self._config.resident.agent_id)
 
     def _open_client(self) -> ManagedLlmClient | None:
         # 按 Kindred config 的 provider 选择实现；Provider credential 不从 OpenClaw 读取。

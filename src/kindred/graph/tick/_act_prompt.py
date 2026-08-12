@@ -101,6 +101,8 @@ class ActPromptContext:
     en_route_destinations: tuple[str, ...]
     committed_artifacts: tuple[tuple[str, str], ...] = ()
     possession_facts_section: str = ""
+    expression_context_section: str = ""
+    relationship_summary: str = ""
     decision_reason: str = ""
     sense_note: str = ""
     current_engagement: float | None = None
@@ -208,14 +210,17 @@ def render_act_prompt(context: ActPromptContext) -> str:
     engagement_section = _render_engagement_section(context)
     logger.debug(
         "prompt_sections role=act.llm activated_skill_chars=%d reason=activity_selected "
+        "relationship_context_chars=%d relationship_reason=user_tone_only "
         "phase_context_chars=%d "
         "phase_scope=location_presence_outbound_decision_handoff phase_reason=%s",
         len(skill_section),
+        len(context.relationship_summary),
         len(context.location_section)
         + len(presence_section)
         + len(outbound_section)
         + len(artifact_section)
         + len(possession_facts_section)
+        + len(context.expression_context_section)
         + len(decision_handoff_section)
         + len(engagement_section),
         context.kind,
@@ -230,6 +235,8 @@ def render_act_prompt(context: ActPromptContext) -> str:
         current_step=context.current_step,
         location_section=context.location_section,
         possession_facts_section=possession_facts_section,
+        expression_context_section=context.expression_context_section,
+        relationship_summary=context.relationship_summary,
         outbound_fact_section=outbound_section,
         artifact_section=artifact_section,
         decision_handoff_section=decision_handoff_section,
@@ -244,8 +251,12 @@ def _render_artifact_section(artifacts: tuple[tuple[str, str], ...]) -> str:
     lines = [
         "## 当前活动已提交的作品",
         "只可在后续动作中显式使用这里列出的 artifact_ref；正文仍由 Host 保管。",
+        "调用工具时逐字复制引号内的完整值；`artifact:` 前缀是 artifact_ref 的一部分。",
     ]
-    lines.extend(f"- {artifact_ref}（profile={profile}）" for artifact_ref, profile in artifacts)
+    lines.extend(
+        f'- artifact_ref="{artifact_ref}"（profile={profile}）'
+        for artifact_ref, profile in artifacts
+    )
     return "\n".join(lines)
 
 
@@ -303,7 +314,7 @@ def render_activity_prompt_context(
     if not end_activity:
         lines.append(
             "原子动作（step 只能从这几个选；intent 是该动作在本 activity 的味道；"
-            "effect 的 direction/magnitude 是 declared hard boundary）："
+            "effect 的 direction/magnitude 是通常体验软先验，不是本次硬结算）："
         )
     for action in context.actions if not end_activity else ():
         effects = (
@@ -336,25 +347,20 @@ def render_activity_prompt_context(
     if not end_activity:
         if context.requested_target and current_step is None:
             lines.append(
-                "这是新 Activity run：实际选中的 Action 是 entry；declared key 可省略交给 Host "
-                "中点，也可提交合法 signed override。"
+                "这是新 Activity run：实际选中的 Action 是 entry；看见 Outcome 后可按本拍具体经历"
+                "提交合法 signed delta，省略即不改变数值。"
             )
         elif isinstance(current_step, str):
             lines.append(
-                f"上一拍 step={current_step}：继续同一 step 时不得重提其 declared key；"
-                "切换到不同 Action 才是 entry，可省略或合法 override 新 Action effect。"
+                f"上一拍 step={current_step}：继续同一 step 不是新的 entry，不会自动重放通常体验"
+                "先验；若本拍出现新的具体体验，可按 1..10 小幅提交任意合法轴，否则省略。"
+                "切换到不同 Action 时，新 Action 是 entry，看见 Outcome 后可按 1..80 表达本拍经历。"
             )
     if end_activity and isinstance(current_step, str):
-        previous_actions = [action for action in context.actions if action.name == current_step]
-        if len(previous_actions) == 1 and previous_actions[0].effects:
-            effect_keys = "、".join(
-                _effect_path(name) for name, _direction, _magnitude in previous_actions[0].effects
-            )
-            lines.append(
-                f"上一 Action 已由 Host 结算的 effect keys：{effect_keys}；"
-                "end 的 Needs/Affect 回味不要再使用这些 key，其他未声明轴仍可按本拍真实情境"
-                "提交 small signed delta。"
-            )
+        lines.append(
+            f"上一 Action={current_step}：end 不会自动重放它的通常体验先验；若收尾时新形成了"
+            "具体回味，可按 1..10 小幅提交任意合法轴，否则省略。"
+        )
     lines.append(f"终止条件（心仲裁何时 end_activity）：{context.terminal_when}")
     lines.append(
         "收尾（end_activity）：满足终止条件就 end_activity。end 不是清空，是转进一拍"

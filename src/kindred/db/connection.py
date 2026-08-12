@@ -24,7 +24,7 @@ _LOG = logging.getLogger(__name__)
 
 # schema.sql 与 connection.py 同目录
 _SCHEMA_PATH: Final[Path] = Path(__file__).parent / "schema.sql"
-_CURRENT_SCHEMA_VERSION: Final[int] = 5
+_CURRENT_SCHEMA_VERSION: Final[int] = 6
 """当前 schema 版本。
 
 Version History
@@ -41,6 +41,8 @@ Version History
   纯加表（CREATE TABLE IF NOT EXISTS），既有库 migrate 幂等安全。
 * **v5**（2026-07，Artifact Visibility ART1A）：+ artifact_commit Host 读模型。
   首次升级从合法 canonical tick 一次性回填，之后由 T3 同事务副写。
+* **v6**（2026-08，Relationship REL1-A）：+ relationship_profile 当前关系权威表。
+  纯加表，不回放或修改既有 tick / state_latest。
 
 Phase β 加 ALTER 类迁移时，需配合 connection.migrate() 重构为
 逐语句 execute（详见 migrate docstring "事务语义限制" 节）。

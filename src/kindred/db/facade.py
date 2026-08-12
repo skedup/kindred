@@ -81,12 +81,14 @@ from kindred.db import connection as _conn_mod
 from kindred.db import inventory as _inventory_mod
 from kindred.db import messages as _messages_mod
 from kindred.db import places as _places_mod
+from kindred.db import relationships as _relationships_mod
 from kindred.db import thoughts as _thoughts_mod
 from kindred.db import ticks as _ticks_mod
 from kindred.db import watcher_cursor as _watcher_cursor_mod
 from kindred.db._types import TickWriteParams
 from kindred.db.messages import MainSessionMessage
 from kindred.inventory.catalog import InventoryItem
+from kindred.relationship.models import RelationshipChange, RelationshipProfile
 from kindred.state._types import IsoDatetime
 from kindred.state.interior import Thought
 
@@ -316,6 +318,15 @@ class KindredDB:
         self._require_transaction("add_inventory_items")
         return _inventory_mod._add_inventory_items_impl(self._conn, items)
 
+    def create_relationship(self, profile: RelationshipProfile) -> None:
+        """Create one current profile inside an explicit caller-owned transaction."""
+        self._require_transaction("create_relationship")
+        _relationships_mod._create_relationship_impl(self._conn, profile)
+
+    def apply_relationship_change(self, change: RelationshipChange, tick_id: int) -> bool:
+        self._require_transaction("apply_relationship_change")
+        return _relationships_mod._apply_relationship_change_impl(self._conn, change, tick_id)
+
     def upsert_message(self, message: MainSessionMessage) -> bool:
         """写入一条 main session 消息（幂等）；返回是否真正写入新行。
 
@@ -384,6 +395,10 @@ class KindredDB:
         """Catalog 当前物品数。"""
         return _inventory_mod.count_inventory_items(self._conn)
 
+    def get_relationship(self, subject_key: str) -> RelationshipProfile | None:
+        """Exact lookup of one current Relationship profile."""
+        return _relationships_mod.get_relationship(self._conn, subject_key)
+
     def get_episodes(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """读最近的 episode 列表（significance >= 7 的 tick）。"""
         return _ticks_mod.get_episodes(self._conn, limit=limit)
@@ -391,6 +406,10 @@ class KindredDB:
     def get_recent_ticks(self, *, limit: int = 5) -> list[dict[str, Any]]:
         """读最近 N 个连续 tick 轨迹（不过滤 significance，Layer A）。"""
         return _ticks_mod.get_recent_ticks(self._conn, limit=limit)
+
+    def get_recent_activity_rows(self, *, until: str, limit: int = 512) -> list[dict[str, Any]]:
+        """读时间窗内最近的 Activity 轻量行。"""
+        return _ticks_mod.get_recent_activity_rows(self._conn, until=until, limit=limit)
 
     def get_activity_artifacts(
         self, *, activity_name: str, started_at: str

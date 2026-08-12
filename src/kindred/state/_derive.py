@@ -301,6 +301,13 @@ def _decay_affect(
         else:
             delta = (baseline - prev_value) * rate * elapsed_min
             candidate = round(prev_value + delta)
+            if (
+                field == "arousal"
+                and elapsed_min >= 5
+                and prev_value != baseline
+                and candidate == prev_value
+            ):
+                candidate += 1 if baseline > prev_value else -1
             new_value = max(min(prev_value, baseline), min(max(prev_value, baseline), candidate))
         updates[field] = new_value
 

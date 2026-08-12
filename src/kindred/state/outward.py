@@ -112,7 +112,7 @@ class Activity(StrictBase):
         default=None,
         description="高级意图内此刻所在原子状态（activity SKILL states 之一，"
         "如 explore_food 的 walk/eat）；与 act.llm 的 current_state 合一（同一"
-        "个状态既驱动 state_effects 档位 clamp、又是 step）；None=未进入状态机",
+        "个状态用于选择通常体验软先验与判断 entry/continuity 幅度）；None=未进入状态机",
     )
     context: ActivityContext | None = Field(
         default=None,

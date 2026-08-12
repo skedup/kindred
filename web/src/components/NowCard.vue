@@ -2,21 +2,33 @@
 // 「此刻」卡片 —— 叙事为主，指标可展开。
 // companion 看叙事：ta 在做什么、什么心情、在哪。engineer 点开看 7+4+3 维。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { fetchNow } from '../api/client'
+import { fetchNow, fetchRelationship } from '../api/client'
 import {
   activityPresentation,
   phaseLabel as toPhase,
   weekdayLabel as toWeekday,
 } from '../api/labels'
-import type { NowResponse } from '../api/types'
+import type { NowResponse, RelationshipView } from '../api/types'
 import GaugeBar from './GaugeBar.vue'
 
 const data = ref<NowResponse | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
+const relationship = ref<RelationshipView | null>(null)
 const showMetrics = ref(false)
 const REFRESH_INTERVAL_MS = 30_000
 let refreshTimer: number | null = null
+const roleLabels = { unlabeled: '未定义', friend: '朋友', lover: '恋人', hostile: '敌对' }
+const relationshipAxes = [
+  ['trust', '信任', '可靠、尊重边界与安全暴露脆弱的程度', 120, 24],
+  ['attachment', '情感投入', '这段关系在 ta 内在生活中的持续分量', 216, 120],
+  ['attraction', '吸引', 'ta 对这个具体的人形成的指向性吸引', 120, 216],
+  ['friction', '摩擦', '关系里尚未化解的刺、戒备与阻力', 24, 120],
+] as const
+const radarPoints = computed(() => relationshipAxes.map(([key, , , x, y]) => {
+  const ratio = (relationship.value?.[key] ?? 0) / 100
+  return [120 + (x - 120) * ratio, 120 + (y - 120) * ratio]
+}))
 
 const phaseLabel = computed(() => toPhase(data.value?.narrative.time_phase ?? ''))
 const weekdayLabel = computed(() => toWeekday(data.value?.narrative.weekday ?? ''))
@@ -86,6 +98,11 @@ async function load(background = false): Promise<void> {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     if (!background) loading.value = false
+  }
+  try {
+    relationship.value = await fetchRelationship()
+  } catch {
+    relationship.value = null
   }
 }
 
@@ -280,6 +297,30 @@ onUnmounted(() => {
         significance {{ data.metrics.significance }} · trigger {{ data.trigger_source ?? '—' }}
       </div>
     </div>
+
+    <div class="section relationship">
+      <div class="section-title faint">ta 当前承认的关系角色</div>
+      <div v-if="relationship" class="relationship-role">
+        {{ roleLabels[relationship.declared_role] }}
+      </div>
+      <div v-if="relationship" class="radar-wrap">
+        <svg viewBox="0 0 240 240" role="img" aria-label="当前关系四轴雷达图">
+          <g class="radar-grid">
+            <polygon v-for="n in 4" :key="n" :points="`120,${120 - n * 24} ${120 + n * 24},120 120,${120 + n * 24} ${120 - n * 24},120`" />
+            <line x1="120" y1="24" x2="120" y2="216" />
+            <line x1="24" y1="120" x2="216" y2="120" />
+          </g>
+          <polygon class="radar-shape" :points="radarPoints.map((p) => p.join(',')).join(' ')" />
+          <circle v-for="(axis, i) in relationshipAxes" :key="axis[0]" class="radar-point"
+            :cx="radarPoints[i]?.[0]" :cy="radarPoints[i]?.[1]" r="5" tabindex="0">
+            <title>{{ axis[1] }} {{ relationship[axis[0]] }}：{{ axis[2] }}</title>
+          </circle>
+        </svg>
+        <span class="radar-label top">信任</span><span class="radar-label right">情感投入</span>
+        <span class="radar-label bottom">吸引</span><span class="radar-label left">摩擦</span>
+      </div>
+      <div v-else class="faint">当前关系暂时读不到</div>
+    </div>
   </div>
 </template>
 
@@ -466,6 +507,19 @@ onUnmounted(() => {
   background: rgba(178, 86, 104, 0.06);
   border-radius: 0 8px 8px 0;
 }
+.relationship-role { font-size: 1.08rem; font-weight: 600; }
+.radar-wrap { position: relative; width: min(100%, 360px); aspect-ratio: 1; margin: 8px auto; padding: 28px; }
+.radar-wrap svg { width: 100%; height: 100%; overflow: visible; }
+.radar-grid polygon, .radar-grid line { fill: none; stroke: var(--border); stroke-width: 1; }
+.radar-shape { fill: rgba(178, 86, 104, 0.28); stroke: var(--accent-soft); stroke-width: 2; }
+.radar-point { fill: var(--gold); stroke: var(--bg-card); stroke-width: 2; cursor: help; }
+.radar-point:focus { outline: none; stroke: var(--text); stroke-width: 3; }
+.radar-label { position: absolute; color: var(--text-dim); font-size: 0.75rem; white-space: nowrap; }
+.radar-label.top { top: 0; left: 50%; transform: translateX(-50%); }
+.radar-label.right { right: 0; top: 50%; transform: translateY(-50%); }
+.radar-label.bottom { bottom: 0; left: 50%; transform: translateX(-50%); }
+.radar-label.left { left: 0; top: 50%; transform: translateY(-50%); }
+@media (max-width: 480px) { .radar-wrap { padding: 30px 38px; } }
 .thought.heavy {
   border-left-color: var(--text-faint);
   background: rgba(122, 106, 100, 0.08);

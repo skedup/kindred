@@ -151,6 +151,16 @@ class NowResponse(BaseModel):
     empty: bool = Field(default=False, description="True = 空库（心还没跑过任何 tick）")
 
 
+class RelationshipView(BaseModel):
+    """可信 loopback 观察面的当前 Relationship 原始四轴。"""
+
+    declared_role: Literal["unlabeled", "friend", "lover", "hostile"]
+    trust: int = Field(ge=0, le=100)
+    attachment: int = Field(ge=0, le=100)
+    attraction: int = Field(ge=0, le=100)
+    friction: int = Field(ge=0, le=100)
+
+
 class StreamItem(BaseModel):
     """生命流的一条——一个 tick 的轻量摘要（不含 8 层 state）。
 
