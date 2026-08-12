@@ -189,6 +189,9 @@ class CapabilityRegistry:
     def tool_defs(self) -> tuple[ToolDef, ...]:
         return tuple(item.tool_def for item in self._tools.values())
 
+    def registered_tool(self, tool_name: str) -> RegisteredTool | None:
+        return self._tools.get(tool_name)
+
     def _side_effect_denied(self, item: RegisteredTool, context: HostTickContext) -> bool:
         if item.tool_def.effect != "external_side_effect":
             return False

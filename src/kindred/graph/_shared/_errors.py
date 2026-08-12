@@ -46,7 +46,7 @@ isinstance 校验。
 上游 state 是图内自产的 dict，按需取值，不建整包 model：
 
 A. **多 helper 链式取值**（``sense_llm`` 的 ``_require_interior`` /
-   ``_require_mood``）
+   ``_require_environment``）
 
     ::
 
@@ -58,8 +58,8 @@ A. **多 helper 链式取值**（``sense_llm`` 的 ``_require_interior`` /
 
    优点：helper 名自带文档、可链式取值、错误信息可逐层附诊断上下文
 
-   适用：**字段需要逐层取值参与后续逻辑**（例：取 interior → 取 mood →
-   计算 mood_subjective 覆写前的老值）
+   适用：**字段需要逐层取值参与后续逻辑**（例：取 interior → 取 thoughts →
+   应用 thought_diff）
 
 B. **表驱动批量校验**
 

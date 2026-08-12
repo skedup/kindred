@@ -8,7 +8,11 @@ from kindred.resident._contract import (
     ResidentInitResult,
     WorldResolution,
 )
-from kindred.resident._initialize import initialize_resident, require_committed_resident
+from kindred.resident._initialize import (
+    initialize_resident,
+    read_owned_persona_file,
+    require_committed_resident,
+)
 
 __all__ = [
     "PersonaProjection",
@@ -18,5 +22,6 @@ __all__ = [
     "ResidentInitResult",
     "WorldResolution",
     "initialize_resident",
+    "read_owned_persona_file",
     "require_committed_resident",
 ]

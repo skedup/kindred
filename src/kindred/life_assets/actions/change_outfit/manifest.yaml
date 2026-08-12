@@ -4,6 +4,9 @@ state_effects:
   aesthetic:
     direction: up
     magnitude: medium
+  comfort:
+    direction: up
+    magnitude: small
 applies_when: 想改变 top/bottom/outer/bra/panties/socks/shoes/accessory；标量槽位更换写 selector、保留省略、不穿写 null；accessory 更换写 selector 数组、保留省略、不戴写 []；原样保留时跳过
 capabilities:
   - inventory

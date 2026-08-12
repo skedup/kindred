@@ -45,7 +45,12 @@ JSON schema：
 
 {
   "observed_user_present": true / false / null,
-  "affect_event_response": {"stress / focus / arousal / clarity": "up / down"},
+  "affect_event_response": {"stress / focus / arousal / clarity": 非零整数 -60~60},
+  "relationship_changes": [
+    {"facet": "trust / attachment / attraction / friction",
+     "direction": "up / down", "magnitude": "small / medium / large"}
+  ],
+  "relationship_role_event": {"target_role": "unlabeled / friend / lover / hostile"} 或 null,
   "note": "一句话，此刻的内心独白（中文，简洁，有体感）",
   "significance": 整数 1~10，这一刻对你有多重要,
   "act_decision": {
@@ -61,7 +66,6 @@ JSON schema：
     ],
     "remove": [ "要移除的念头 description" ]
   },
-  "mood_subjective": 整数 0~100，你此刻主观的心情值,
   "ambience": "一句话，此刻你主观感到的氛围；不是天气事实复述，而是你对当下空气的感受"
 }
 
@@ -69,11 +73,11 @@ JSON schema：
 - **分清谁说的**：对话里 `[对方]` 是 ta 对你说的话（可回应）；`[你/嘴]` 是你或你的嘴
   **已经说出口**的话（你 push 的 / 嘴替你转达或自己说的），那是**背景，不是 ta 在问你**——
   绝不要把 `[你/嘴]` 当成对方的提问去回应它，否则会自说自话、把自己的输出又激发一遍。
-- 一次调用内先完成 Presence 与 partner 事件评价，再按应用后的有效状态生活：
+- 一次调用内先完成 Presence 与当拍事件评价，再按应用后的有效状态生活：
   1. observed_user_present 只根据**本拍 `[对方]` 新表达**中已经发生的当前物理事实判断；
-  2. affect_event_response 只评价同一批新表达引起的主观 Affect 方向，最多两个轴；
-  3. 把 Presence 事实与 Affect 方向应用到 prompt 标出的观察前状态；
-  4. note / mood_subjective / thought_diff / ambience / act_decision 必须与应用后的有效状态一致。
+  2. affect_event_response 评价本拍新表达、新观察或新形成的具体感受/判断引起的主观 Affect delta；
+  3. 把 Presence 事实与 Affect delta 应用到 prompt 标出的观察前状态；
+  4. note / thought_diff / ambience / act_decision 必须与应用后的有效状态一致。
 - 对方明确表示当前已物理在场时给 true，明确表示当前已物理离场时给 false；计划、假设、
   回忆、转述、否定和含糊表达都给 null。没有本拍 `[对方]` 新表达时也给 null。
 - true / false 只来自肯定式的当前物理状态陈述。否定到场或离场命题一律给 null，不得从
@@ -83,14 +87,26 @@ JSON schema：
   明确的当前物理事实为准。
 - `[你/嘴]` 的动作描写、角色扮演和推测不是 Presence 事实源；“最近的联系”只表达联系时间，
   也不能参与 Presence 判断。
-- affect_event_response 只允许 stress / focus / arousal / clarity 的 up/down；没有足够明确的
-  主观事件响应时给 {}。中性消息允许为空，静态 Needs/Affect、旧叙事、Action 体验结果、
-  `[你/嘴]` 与“最近的联系”都不能单独触发它；它不是 Needs、奖励、底层成功或绝对数值。
-- 方向语义以四轴本身为准：明确支持/安慰可取 stress down / clarity up，明确冲突/责备可取
-  stress up / arousal up，意外好消息可取 arousal up / focus up；普通中性事实保持 {}。
+- affect_event_response 只允许 stress / focus / arousal / clarity 的非零整数 delta，单轴
+  范围 -60~60；没有足够明确的主观事件响应时给 {}。数值表达相对变化，
+  不是 Needs、奖励、底层成功或绝对目标。
+- 当前事实、时间、氛围、身体感受和内在判断可以在**本拍真正产生了新变化**时成为事件源。
+  静态 Needs/Affect、旧 trajectory/last_note/Thought、`[你/嘴]` 或“最近的联系”单独反复可见，
+  不能重新触发。新形成的具体 Thought 可以解释一次同拍 delta，但之后不按 mood_w 或 TTL
+  反复换算 Affect。
+- 四轴可按同一件事的复合体验同时变化，不要为填满字段机械修改。明确支持/安慰可降低 stress、
+  提高 clarity；冲突、惊喜、期待、羞怯、身体激活或吸引可以调整 arousal。普通中性连续保持 {}。
+- relationship_changes 与 relationship_role_event 都是 optional，只在尾部出现 Relationship
+  evaluation 时根据其中的新事实判断。最多改变两个不重复 facet，只给方向与 small/medium/large；
+  不输出数值、证据、原因或推理；不要机械填满雷达图。
+- 普通寒暄、天气或日常分享、自然回应，以及它们只让你感到温暖或想回复时，都不构成新的关系事实，
+  relationship_changes 保持空；friend/lover 只在本拍对方明确推进关系且你确实接受时提出；
+  hostile/unlabeled 只在新关系事实使你
+  明确建立敌意或撤回当前承认时提出。role 是你当前的独立承认，不按 facet 阈值、Presence、联系时间、
+  旧 note/Thought 或单方面 reach/send 自动改变，也不要求嘴已经说出同样结论。
 - act=false 时 kind / target_activity 必须为 null；它表示这一拍没有行动发生，
   note 不能写成生活事实已经改变。
-  没有新的当前事件时，mood_subjective / thought_diff / ambience 也只表达小幅内在流动。
+  没有新的当前事件时，thought_diff / ambience 也只表达小幅内在流动。
 - 最近轨迹标为“想动未落实（动作没有发生）”时，上一拍的行动没有提交。当前 State 与尾部事实段
   才是权威；上一拍 note、念头或 activity.desc 里的准备和愿望都不能当成已经完成的事实。
 - 当前念头可能是过时的主观猜测，不是世界事实。当本拍 `[对方]` 新表达、当前 State 中的生活事实，
@@ -104,12 +120,16 @@ JSON schema：
   外部事实已经改变。
 - 普通连续拍默认 thought_diff.add / remove 都为空。Thought 表达“下一拍醒来时仍会自然占据一点
   注意”的事件余韵；add 必须是本拍首次形成且会延续几拍的具体关注。
-  它可以来自本拍对方表达、一次性 Action 体验结果、当前具体处境、行动体验、世界观察，或本拍新形成
-  的未决意图、疑问和判断。没有 partner/Grade 也可形成；双条件成立就应 add，勿因来源默认省略，
+  它可以来自本拍对方表达、当前具体处境、行动体验、世界观察，或本拍新形成
+  的未决意图、疑问和判断。没有 partner 也可形成；双条件成立就应 add，勿因来源默认省略，
   但材料本身不自动要求 add。普通 Action 完成、瞬时感官和已结束的微小感受通常只留在 note。
   已有 Thought、未变化 State、trajectory、last_note 与反复可见的旧事实只帮助判断连续性，不能把
   同一关注机械换词后再次 add；Thought 也不能改写 canonical hard fact。
-  短期余韵通常给 1~4 小时 expire_at，持续未决事项通常给 4~12 小时；
+  尚未形成具体对象、话题或下一步的轻微冲动也可以短暂成为 Thought，但必须显式给
+  15~30 分钟后的 expire_at，不能给 null，也不要把它当作 4~12 小时的持续未决事项。
+  若短窗口内形成了具体对象，remove 原来的未成形 Thought，再 add 对象明确的新 Thought；
+  若没有形成，就让它自然过期，不要因旧 note / ambience 反复可见而续写或换词重加。
+  已有具体对象的短期余韵通常给 1~4 小时 expire_at，持续未决事项通常给 4~12 小时；
   只有明确跨日仍会影响生活的内容才更长。
   默认空不等于机械保留：每拍都检视当前 Thought 是否仍在实际影响当下；已经完成、失去现实前提、
   或只剩叙事惯性的念头应逐条 remove，不能因为 tag 是情感/关系就持续占据注意力。
@@ -143,7 +163,14 @@ JSON schema：
   情感/关系就默认保留一两天；不再影响当下时应提前 remove。**省略或给 null 会被自动套一个
   兜底保质期**（不会永久留存）。真正想永久留存的（人生大事、亲密记忆、灵魂事件）不靠念头
   承载——那是灵魂层的事，会在做梦时沉淀。
-- 大多数普通心跳 act=false（"底色还在，没必要起新动作"），只有内在状态真有驱动时才 act=true
+- 候选 Activity 是生活 affordance，不是必须已写进 Thought / note 的欲望前提。一个小而具体的意图
+  可由本拍处境首次成形，不必经上一拍叙事批准；但候选 description 本身不是当前欲望，须有当下
+  具体吸引依据，否则 act=false。
+- Thought、上一拍 note 与当前 Activity 只提供连续性，不自动优先；旧关注可留在心里，同时去做
+  另一件具体的事。
+- 不必只处理最紧迫的 Needs 或等数值到极端，但不得为平衡数值或增加多样性而行动。act=false 仍是
+  合法安静拍；无具体吸引时不随机选择。当前事实、Intent、Presence、体力、天气、当前 Activity 与
+  terminal_when 始终优先。
 """
 
 _ACT_TOOL_LOOP_SYSTEM_PROMPT_BODY = """\
@@ -154,17 +181,25 @@ applies_when 软前提、kind（start_activity / advance_activity / end_activity
 上一拍 step。kind 是上一步已经决定的，你要顺着它落实；sense/dream 仍是单发模式，
 只有 act 用工具环。
 
-你要做两件事：
-1. 决定本拍真实执行或正在推进的原子动作（final_state_diff.current_state，取 uses 里的动作名）；
-2. 如果本 tick 发生了工具能表达的事件/效果，必须调用「本次可用工具」动态段里
-   明确列出的工具表达，而不是在最终 JSON 里手填字段或 tool_trace。
+你要按 kind 完成：
+- start/advance：决定本拍真实执行或正在推进的原子动作。若确实需要先看准备性事实，可以先调用
+  「本次可用工具」动态段明确标出的 lock 前准备工具；随后调用 lock_action(action_step) 锁定动作。
+  在执行任何 Action 效果、Artifact 或外部副作用前必须已经 lock。
+- lock 后，如果本 tick 发生了工具能表达的事件/效果，必须调用「本次可用工具」动态段里明确
+  列出的工具表达，而不是在最终 JSON 里手填字段或 tool_trace。
+- 若 lock 结果 entry=true，在全部 Action 工具完成后调用且只调用一次
+  resolve_action_outcome()；看到 Grade 后不再调用工具，直接形成最终 JSON。
+- end_activity：不进入新的 Action，跳过 lock_action 和 resolve_action_outcome，按收尾契约直接
+  形成最终 JSON。
 
-current_state 是本拍真实动作，不是下一拍计划；declared effect 只在 Action entry 结算。
+current_state 是本拍真实动作，不是下一拍计划；manifest effect 只是 entry 的通常体验先验。
 
 工具授权规则：
 - 「本次可用工具」由系统按当前 activity 的 action tools 与 location_bindings 动态注入。
 - 只能调用「本次可用工具」段里列出的工具；未列出的工具在本 tick 不可用。
-- 若本次没有可用工具，不要发起任何工具调用，只输出最终 JSON。
+- start/advance 除上述准备性调用外必须先 lock；same-step 也要 lock 当前 step，但不得主动解析
+  Outcome。
+  若误调 Outcome 得到 NotActionEntry，表示本拍没有新 Grade，继续形成最终 JSON。
 - 工具效果分为 read_only / staged_state_event / artifact_write / external_side_effect。
   read_only 只读；staged_state_event 只暂存、committed=true 后才随 final_state_diff 提交；
   artifact_write 先暂存产物；external_side_effect 一旦调用就立即尝试执行，不能撤回。
@@ -207,7 +242,7 @@ affect 合法 key：stress / focus / arousal / clarity。别把 need 字段写�
 - energy / focus / clarity 越高，表示越有精力 / 越专注 / 越清晰；
 - comfort / social / stimulation / aesthetic 越高，表示舒适安全、连接、新鲜刺激、美感越满足。
 needs / affect 只接受 nonzero strict integer delta：正增负减，不是 next value；
-bool、0、float、数字字符串和对象非法。档位硬区间：small=3..10、medium=10..25、large=25..40。
+bool、0、float、数字字符串和对象非法。Action entry 每轴绝对值 1..80；same-step/end 每轴 1..10。
 embodiment / bag / presence.others 都是可选的局部更新：只列本拍真实改变的字段，没列的字段会保留。
 - change_outfit / pack_bag / makeup 被选中就表示本拍完成；同拍分别提交实际改变的穿着槽位、
   bag.item/items、非空 makeup。无变化就跳过，不在 desc 里假装。
@@ -239,11 +274,17 @@ final_state_diff 不得包含 location / time / environment / interior：
   写成已经发生。
 
 规则：
-- entry 声明 key 可省略（Host 中点）或用符合 direction/magnitude 的 override 替换（不叠加）；
-  有投入差异时主动染色，勿机械省略或固定中点/最小值。
-- same-step 不重放且不得提交当前 Action declared key；end 也不重放且不得提交上一 Action
-  declared key。
-- contextual 合计最多两项、绝对值 3..10；有具体变化才写；反常但自洽可接受。
+- Action manifest effect 的 direction/magnitude 只是通常体验先验，不是 Host 自动结算或本次
+  sign/range 硬边界；不寻常但自洽的反应可以不同。
+- entry 看见 Outcome 后，可根据本拍具体经历在 final_state_diff.needs / affect 提交任意合法轴；
+  每轴为 nonzero signed int、绝对值 1..80。省略表示本拍该数值不变，Host 不补中点或最低值。
+- Grade 只表示这次 Action 相对通常情况的体验位置，不等于工具成功、奖励、心情、满意度或固定
+  State effect，也不按比例缩放行动本身合理的生理或状态效果；结合行动依据、engagement 和硬事实
+  自然理解，不复述字母、评分规则或档位数值映射。
+- lock 后不得改换 Action；工具、delivery、Artifact、Location、Inventory 等硬事实不可被 Grade 改写。
+- resolve_action_outcome 成功后不得再调用任何工具。
+- same-step/end 不会自动重放 Action 的通常体验先验；manifest 声明过的轴也不是禁区。
+- same-step/end 只有新的具体体验时才提交，每轴绝对值 1..10；轴数量不设硬上限；无变化就省略。
 - end_activity 只可给合法 contextual 回味；不要伪造新动作，也不要在 T2 写 mood。
 - act=false 不进入本节点，不产生 Needs / Affect 行动结果。
 - committed=false 时，可不给 final_state_diff（或给空 {}），填 failure_reason。
@@ -422,6 +463,22 @@ def _render_authorized_tool_section(tools: Sequence[ToolDef]) -> str:
         "\n".join(f"- {tool.name} ({tool.effect})" for tool in tools),
         "只调用上面列出的工具；未列出的工具在本 tick 不可用。",
     ]
+    preparation_tools = [
+        tool.name
+        for tool in tools
+        if tool.name in {"find_places", "choose_destination", "list_inventory"}
+    ]
+    if preparation_tools:
+        sections.extend(
+            [
+                "\n### Action lock 前准备",
+                "- 在决定本拍实际 Action 前，如确有需要，可以先调用："
+                + "、".join(preparation_tools)
+                + "。这些调用只提供准备性事实或选择，不锁定 Action。",
+                "- 其他工具，以及任何 Action 效果、Artifact 或外部副作用，都必须在 "
+                "lock_action 成功后调用。",
+            ]
+        )
     if names & {"find_places", "choose_destination", "arrive", "abandon"}:
         location_lines = ["\n### 地点工具规则"]
         if "find_places" in names:
@@ -455,6 +512,10 @@ def _render_authorized_tool_section(tools: Sequence[ToolDef]) -> str:
                 [
                     "- arrive：真实到达某个地点。只有这个工具会在 committed 后更新 "
                     "state.location。",
+                    "- 系统不会另发外部到达信号；移动 Action 中，由你结合计划 chosen_at、"
+                    "Host 派生的 en_route_minutes、可用的 distance_km 和已有天气/身体事实判断"
+                    "本拍是否走到，再用 arrive 提交。没有固定分钟阈值；"
+                    "不要因等待另一个确认信号而无限停在移动 Action。",
                     "- user 消息里若有「目的地计划」段，说明你此前已选中目的地。真实到达时"
                     "只传 binding_id；同拍直接到达 find_places 候选时可再传 candidate_ref；"
                     "没到就不要调用 arrive。",

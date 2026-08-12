@@ -3,15 +3,9 @@
 The heart daemon calls :meth:`HistorySync.sync_once` right before each watcher
 poll. It pulls the session's recent ``chat.history`` over the Gateway WS,
 converts each entry via :func:`build_from_gateway` (toolResult skip / role map /
-text_summary compaction / **心自身 inter-session push echo 按 provenance 跳过**），
+text_summary compaction),
 and upserts into ``main_session_messages`` (idempotent ``INSERT OR IGNORE``).
 The watcher then polls the now-populated table.
-
-Echo 处理（Bug2，2026-06-29）：心主动 push 现走 inter-session announce 传输，其触发
-消息以 ``user`` 角色回流进 ``chat.history``，但带 ``provenance.sourceTool ==
-"kindred_heart"``。:func:`build_from_gateway` 据此跳过——本处不再有单独的 echo
-过滤（旧的 text+时间窗 ``_filter_own_echo`` 已退役）。详见
-``docs/discussions/2026-06-29-bug2-heart-push-via-inter-session.md``。
 
 Why this exists separate from the daemon: single responsibility + isolated
 failure containment. The **most critical** rule (MEMORY R3): a pull failure must

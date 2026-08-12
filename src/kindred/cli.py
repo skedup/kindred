@@ -134,6 +134,19 @@ def _require_openclaw_binding(config: KindredConfig) -> None:
         raise click.ClickException(f"Kindred OpenClaw 错误：{exc}") from exc
 
 
+def _require_openclaw_runtime(config: KindredConfig) -> None:
+    """Heart 启动前确认 binding v3 与 packaged Mouth Plugin v3 一致。"""
+    from kindred.openclaw.binding import OpenClawBindingError
+    from kindred.openclaw.install import OpenClawInstallError, require_openclaw_runtime
+
+    try:
+        require_openclaw_runtime(config)
+    except (OpenClawBindingError, OpenClawInstallError) as exc:
+        raise click.ClickException(
+            "Kindred OpenClaw Plugin/binding 不一致；请重新运行 kindred openclaw install"
+        ) from exc
+
+
 def _configure_observability(
     config: KindredConfig, *, log_file: Path | None = None
 ) -> PromptDumper:
@@ -587,7 +600,8 @@ def run(
         debug_dump_dir=debug_dump_dir,
     )
     _require_resident_commit(config)
-    _require_openclaw_binding(config)
+    _require_openclaw_runtime(config)
+    _require_relationship_runtime(config)
     prompt_dumper = _configure_observability(config, log_file=config.daemon.log_file)
     from kindred.runtime.daemon import run_daemon
 
@@ -597,6 +611,23 @@ def run(
     )
     ticks = run_daemon(config, prompt_dumper)
     click.echo(f"kindred run — stopped after {ticks} tick(s)")
+
+
+def _require_relationship_runtime(config: KindredConfig) -> None:
+    from kindred.relationship.preflight import (
+        RelationshipPreflightError,
+        require_user_relationship,
+    )
+
+    try:
+        with KindredDB.open_readonly(config.paths.db) as db:
+            require_user_relationship(db)
+    except RelationshipPreflightError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except Exception:
+        raise click.ClickException(
+            "relationship preflight path=relationship_profile.user reason=database_unreadable"
+        ) from None
 
 
 def _platform_service(operation: str, **kwargs: Any) -> Any:
@@ -650,7 +681,7 @@ def start() -> None:
     config_path = _platform_service("service_config_path")
     config = _load_cli_config(config_path=config_path)
     _require_resident_commit(config)
-    _require_openclaw_binding(config)
+    _require_openclaw_runtime(config)
     _doctor_preflight(config_path)
     _platform_service("control_services", config_path=config_path, action="start")
 

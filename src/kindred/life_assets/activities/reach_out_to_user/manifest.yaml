@@ -7,7 +7,8 @@ uses:
     intent: 决定了，把话发出去，主动联系 ta
 terminal_when: |
   话发出去了（send 完成），这个意图就完成了，可以 end_activity。
-  还在 compose 犹豫、或想了又咽回去，就停在 compose（不发）。
+  明确决定不发、或想了又咽回去时，也可以 end_activity 把这次开口收住。
+  尚未决定时可以继续 advance_activity，让 compose 保持未决；犹豫本身不等于失败或已经发送。
 duration_hint: short
 produces: optional
 requires: []

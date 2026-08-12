@@ -23,25 +23,29 @@ LLM 输出是外部不可信源，真实模型可能夹带额外解释字段。�
 ``apply_thought_diff``），且节点下游按 dict 取用。这里只把顶层「存在 + 是 dict」门
 收住，避免裸下标在真 LLM 缺字段时裸 ``KeyError`` 逃出 ``NodeContractError`` 谱系。
 
-注：``significance`` / ``mood_subjective`` / ``committed`` 用 ``strict=True`` ——
+注：``significance`` / ``committed`` 用 ``strict=True`` ——
 bool 是 int 子类，lax 模式会把 ``True`` 当 1、``3.0`` 截成 3 放行，strict 才能把
 这些「类型对但语义错」的输入拒在门外（与原手写 ``isinstance(x, bool)`` 排除等价）。
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from kindred.relationship.models import RelationshipFacetProposal, RelationshipRoleEvent
 from kindred.state._types import NonBlankStr
 
 # 数值范围单一真相源——model 的 Field 约束、生成的 prompt 字段清单、测试都引用这里，
 # 改一处即同步三处（避免 prompt 里硬写「1~10」与校验 ge/le 各自漂移）。
 SIGNIFICANCE_MIN = 1
 SIGNIFICANCE_MAX = 10
-MOOD_MIN = 0
-MOOD_MAX = 100
+AFFECT_EVENT_DELTA_MAX = 60
+AffectEventDelta = Annotated[
+    int,
+    Field(strict=True, ge=-AFFECT_EVENT_DELTA_MAX, le=AFFECT_EVENT_DELTA_MAX),
+]
 
 
 class _LlmResponseBase(BaseModel):
@@ -63,11 +67,23 @@ class SenseResponse(_LlmResponseBase):
             "计划、否定、回忆、转述、假设、含糊或无法确认时为 null"
         ),
     )
-    affect_event_response: dict[str, Literal["up", "down"]] = Field(
+    affect_event_response: dict[str, AffectEventDelta] = Field(
         description=(
-            "仅评价本拍 partner 新表达引起的主观 Affect 方向；key 只允许 "
-            "stress/focus/arousal/clarity，最多两项，无响应时为空对象"
+            "评价本拍新发生的具体处境引起的主观 Affect delta；key 只允许 "
+            "stress/focus/arousal/clarity，value 为非零整数 -60..60，无响应时为空对象"
         ),
+    )
+    relationship_changes: list[RelationshipFacetProposal] | None = Field(
+        default_factory=list,
+        max_length=2,
+        description=(
+            "仅在尾部 Relationship evaluation 存在新证据时提出的稀疏变化；"
+            "最多两个不重复 facet，无变化时省略或为空"
+        ),
+    )
+    relationship_role_event: RelationshipRoleEvent | None = Field(
+        default=None,
+        description="Heart 确实决定改变当前关系承认时才输出的目标 role",
     )
     note: NonBlankStr = Field(
         description="此刻的内心独白；去空白后非空字符串",
@@ -84,15 +100,6 @@ class SenseResponse(_LlmResponseBase):
     act_decision: dict[str, Any] = Field(
         description="行动意图对象（act/kind/target_activity/reason；内部结构另行细校）",
     )
-    mood_subjective: Annotated[
-        int,
-        Field(
-            strict=True,
-            ge=MOOD_MIN,
-            le=MOOD_MAX,
-            description=f"此刻主观心情值；整数 {MOOD_MIN}~{MOOD_MAX}（覆写客观 derive 值）",
-        ),
-    ]
     ambience: NonBlankStr = Field(
         description=(
             "此刻主观氛围描述；由你根据地点/天气/时间/内在状态感受生成，"
@@ -113,19 +120,45 @@ class SenseResponse(_LlmResponseBase):
 
     @field_validator("affect_event_response", mode="before")
     @classmethod
-    def _normalize_affect_event_response(cls, value: object) -> dict[str, str]:
+    def _normalize_affect_event_response(cls, value: object) -> dict[str, int]:
         allowed_keys = {"stress", "focus", "arousal", "clarity"}
-        if not isinstance(value, dict) or len(value) > 2:
+        if not isinstance(value, dict):
             return {}
         if any(
             type(key) is not str
             or key not in allowed_keys
-            or type(direction) is not str
-            or direction not in {"up", "down"}
-            for key, direction in value.items()
+            or type(delta) is not int
+            or delta == 0
+            or abs(delta) > AFFECT_EVENT_DELTA_MAX
+            for key, delta in value.items()
         ):
             return {}
         return dict(value)
+
+    @field_validator("relationship_changes", mode="before")
+    @classmethod
+    def _normalize_relationship_changes(cls, value: object) -> list[RelationshipFacetProposal]:
+        if value is None:
+            return []
+        if not isinstance(value, list) or len(value) > 2:
+            return []
+        try:
+            parsed = [RelationshipFacetProposal.model_validate(item) for item in value]
+        except (TypeError, ValueError):
+            return []
+        if len({item.facet for item in parsed}) != len(parsed):
+            return []
+        return parsed
+
+    @field_validator("relationship_role_event", mode="before")
+    @classmethod
+    def _normalize_relationship_role_event(cls, value: object) -> object:
+        if value is None:
+            return None
+        try:
+            return RelationshipRoleEvent.model_validate(value)
+        except (TypeError, ValueError):
+            return None
 
 
 class _PlaceEvent(_LlmResponseBase):
@@ -231,8 +264,6 @@ def render_contract(model: type[BaseModel]) -> str:
 
 __all__ = [
     "SummaryResponse",
-    "MOOD_MAX",
-    "MOOD_MIN",
     "SIGNIFICANCE_MAX",
     "SIGNIFICANCE_MIN",
     "ActResponse",

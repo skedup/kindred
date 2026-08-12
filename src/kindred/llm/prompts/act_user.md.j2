@@ -13,6 +13,7 @@
   - current_step: str | None 上一拍停在的 step（advance/end 时有；start 时 None）
   - location_section: str    地点上下文段（进行中目的地计划 + find_places 工具入口）；无则为空
   - possession_facts_section: str 当前穿着与随身事实；仅相关 Activity 披露
+  - expression_context_section: str artifact writer 可用的当前生活材料；无则为空
   - outbound_fact_section: str 外部发送事实段（send_to_user 是否真的成功）；无则为空
   - artifact_section: str 当前 Activity run 中可消费的 committed artifact；无则为空
   - decision_handoff_section: str Sense 已消化的本拍 note + 决定缘由；无则为空
@@ -21,11 +22,18 @@
 [act.llm tick @ {{ triggered_at }} kind={{ kind }} target={{ target }}]
 {{ skill_section }}
 {{ presence_section }}
+{% if relationship_summary %}
+{{ relationship_summary }}
+（低显著度背景：只用于理解语气，不授权 Activity、Capability 或发送，也不要求这一拍围绕 user 展开。）
+{% endif %}
 {% if location_section %}
 {{ location_section }}
 {% endif %}
 {% if possession_facts_section %}
 {{ possession_facts_section }}
+{% endif %}
+{% if expression_context_section %}
+{{ expression_context_section }}
 {% endif %}
 {% if outbound_fact_section %}
 {{ outbound_fact_section }}
@@ -52,9 +60,12 @@ final_state_diff；不要只宣布下一步准备做什么。
 {%- elif en_route_destinations and kind == "advance_activity" -%}
 你上一拍在：**{{ current_step }}**，且有进行中的目的地计划（去「{{ en_route_destinations | join('」「') }}」）。
 在路上的拍子，停在移动动作继续走是**正确**的，不算原地踏步——没真实到达就不要切到下一个动作假装到了。
-真实到达的这一拍：**调用 arrive 工具**（参数复用目的地计划），current_state 仍只记录本拍
-真实执行或正在推进的动作。若只推进了移动就保持移动动作；只有到达后同拍也真实执行了下一动作，
-才写下一动作。
+系统不会另发一个外部“到达信号”：请结合计划的 chosen_at、Host 派生的 en_route_minutes、
+distance_km（有值时）、移动方式，以及已有的天气和体力事实，判断本拍是仍在途中还是已经走到；
+不设固定分钟阈值，也不要编造精确路程。
+合理时间已经过去、又没有新的受阻事实时，不要只因等待外部确认而无限保持移动动作。
+真实到达的这一拍：**调用 arrive 工具提交到达**（参数复用目的地计划），current_state 仍只记录本拍
+真实执行或正在推进的动作。若只推进了移动就保持移动动作；只有到达后同拍也真实执行了下一动作，才写下一动作。
 改主意不去了：调用 abandon 工具，并在 desc 里如实表达停下/折返；这件事要不要收尾、要不要换做别的，是下一拍心跳的决定，本次照常落实 advance。
 现实条件已不支持继续前往时，调用 abandon 工具并在 desc 里如实表达，别假装还在路上。
 {%- else -%}

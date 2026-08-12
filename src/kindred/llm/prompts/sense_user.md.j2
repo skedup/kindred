@@ -32,8 +32,10 @@
   - presence_before_line     本拍观察前的物理 Presence
   - recent_contact_line      近期联系事实（窗口外为空）
   - traj_line                最近轨迹（recent_ticks 渲染）
+  - life_texture_line        最近 24h 非当前 Activity run 名称（可选）
   - activities_line          可选活动清单（名 + desc）
   - current_activity_line    上一拍你停在的活动状态 + step（settle 长尾时为空）
+  - settled_activity_exit_line settle 长尾退场后的最小生命周期事实
   - stuck_warning_line       原地打转警告（连续多拍同 activity+step 才非空 → 治死循环）
 
   jinja2 用 trim_blocks/lstrip_blocks，{%-/-%} 控制空白。
@@ -72,15 +74,9 @@
 
 最近的轨迹（更早之前你经历的，最新在前）：
 {{ traj_line }}
-{% if action_result_grade_line %}
+{%- if life_texture_line %}
 
-上一拍 Action 的体验结果（只帮助你理解刚发生的体验，不是新的行动或硬事实）：
-{{ action_result_grade_line }}
-- 档位只表示相对通常情况的体验位置，不代表底层成功、心情、满意度、奖励或 State effect。
-- 结合动作含义、Activity 意图与当前场景自然理解；已确认事实和 canonical State 不可改写。
-- 不创造天气、人物、NPC 或 Encounter，也不要重演上一拍 Action。
-- 不复述字母、档位、评分或系统规则；不强制提高 significance、切换 Activity、补偿或继续行动。
-- 结果可以只留在内在理解里，不要求显式汇报。
+{{ life_texture_line }}
 {% endif %}
 
 ═══════════════════════════════════════════
@@ -92,18 +88,36 @@
 {{ situation_block }}
 
 {{ possession_facts_section }}
+{% if relationship_summary %}
+{{ relationship_summary }}
+（低显著度背景：只用于理解语气，不授权 Activity、Capability 或发送，也不要求这一拍围绕 user 展开。）
+{% endif %}
 
-本拍 Presence 观察与 partner 事件评价（先观察，再生活）：
+{% if relationship_evaluation_enabled and relationship_previous_experience %}
+本拍 Relationship evaluation 的前序 committed 经历：{{ relationship_previous_experience }}
+{% endif %}
+本拍 Presence 观察与 Affect 事件评价（先观察，再生活）：
 - 本拍观察前的物理状态：{{ presence_before_line }}
 - 本拍观察前的 Affect：{{ affect_line }}
-- 本拍对方的新表达（按原顺序；只有这里能决定 observed_user_present 和 affect_event_response）：
+- 本拍对方的新表达（按原顺序；只有这里能决定 observed_user_present）：
 {{ current_partner_input }}
-- 先仅根据这些新表达给出 observed_user_present；再评价它们引起的 affect_event_response；
-  然后应用两者，最后让同拍 note、mood_subjective、thought_diff、ambience 和 act_decision
+- 先仅根据这些新表达给出 observed_user_present；再评价本拍新表达、新观察或新形成的具体感受/判断
+  引起的 affect_event_response；
+  然后应用两者，最后让同拍 note、thought_diff、ambience 和 act_decision
   与应用后的有效 Presence/Affect 保持一致。
 - 对方重复明确表达、或你/嘴已经回应过，仍按字面观察；同拍多条里以最后一条明确的当前事实为准。
-- affect_event_response 最多两个 up/down 方向；中性表达允许 {}。它不是 Needs、奖励、成功状态
-  或绝对值；静态 Needs/Affect、“最近的联系”、旧轨迹、旧念头和你/嘴都不是该入口的事件源。
+- affect_event_response 每轴是非零整数 -60~60，表达相对变化，不是 Needs、奖励、成功状态
+  或绝对值。没有新变化时给 {}；静态 Needs/Affect、“最近的联系”、旧轨迹、旧念头和你/嘴
+  单独重复可见时不得重新触发。新 Thought 可以解释一次同拍 delta，之后不把 mood_w 反复换算成 Affect。
+{% if relationship_evaluation_enabled %}
+
+本拍 Relationship evaluation（只评价新关系事实，不要求发生变化）：
+- 当前 partner 批次复用上方“本拍对方的新表达”，保持相同原顺序，不把你/嘴算作 partner。
+- 只根据上述新事实提出 optional relationship_changes / relationship_role_event；没有实际变化时省略、
+  给空 changes 或 null role event。普通寒暄、天气或日常分享、自然回应，以及它们只让你感到温暖或
+  想回复时，都不构成新的关系事实，保持 no_change；不要从 Presence、
+  RecentContact、旧 note/Thought、单方面 reach/send 或当前定性摘要推导变化。
+{% endif %}
 
 你当前的内在状态：
 - 身体 body：{{ body_line }}
@@ -118,6 +132,9 @@
 
 上一拍你停在的状态（还没裁决的起点——现在要决定：继续推进？收尾 end？还是换件事？）：
 {{ current_activity_line }}
+{% elif settled_activity_exit_line %}
+
+{{ settled_activity_exit_line }}
 {% endif %}
 {% if stuck_warning_line %}
 

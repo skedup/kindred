@@ -12,6 +12,7 @@ import type {
   HealthResponse,
   InteriorHistoryResponse,
   NowResponse,
+  RelationshipView,
   StreamResponse,
 } from './types'
 
@@ -35,6 +36,10 @@ export function fetchHealth(): Promise<HealthResponse> {
 export function fetchNow(params?: { reveal?: boolean }): Promise<NowResponse> {
   const q = params?.reveal ? '?reveal=1' : ''
   return getJson<NowResponse>(`/now${q}`)
+}
+
+export function fetchRelationship(): Promise<RelationshipView> {
+  return getJson<RelationshipView>('/relationship')
 }
 
 /** 生命流：全量 tick，cursor 分页。before 缺省=最新一页。 */

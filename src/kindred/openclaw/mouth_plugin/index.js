@@ -1,6 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 
 import { loadMouthContext } from "./binding.js";
+import { registerCommitOutbound } from "./outbound.js";
 
 export default definePluginEntry({
   id: "kindred-mouth",
@@ -11,5 +14,6 @@ export default definePluginEntry({
       const context = loadMouthContext(ctx);
       return context ? { prependContext: context } : undefined;
     });
+    registerCommitOutbound(api, { getSessionEntry, withSessionTranscriptWriteLock });
   },
 });

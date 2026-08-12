@@ -98,6 +98,7 @@ from kindred.graph.tick._act_location import (
     LocationKernelSession,
     apply_location_commit,
 )
+from kindred.graph.tick._act_outcome import ACTION_OUTCOME_TOOL_DEFS, ActionOutcomeKernelSession
 from kindred.graph.tick._act_prompt import (
     ActPromptContext,
     OutboundFactContext,
@@ -107,6 +108,7 @@ from kindred.graph.tick._act_prompt import (
 )
 from kindred.graph.tick._capability_effects import CapabilityEffectSession
 from kindred.graph.tick._effective_action import resolve_effective_action
+from kindred.graph.tick._expression_context import project_expression_context
 from kindred.graph.tick._inventory_transition import resolve_inventory_diff
 from kindred.graph.tick._possession_narrative import render_current_possession_facts
 from kindred.graph.tick._state_transition import (
@@ -117,6 +119,7 @@ from kindred.graph.tick._state_transition import (
 from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
 from kindred.llm.client import ToolCapableLlmClient, ToolLoopError
 from kindred.llm.schemas import ActResponse
+from kindred.llm.templates import render_prompt
 from kindred.llm.tools import ToolEvent
 from kindred.location.candidates import (
     LOCATION_CANDIDATE_RESOLVER_KEY,
@@ -131,10 +134,11 @@ if TYPE_CHECKING:
     from kindred.character_card import HomeProfile
     from kindred.db.facade import KindredDB
     from kindred.observability import PromptDumper
+    from kindred.relationship.preflight import RelationshipReader
 
 logger = logging.getLogger(__name__)
 
-_ACT_TOOL_LOOP_MAX_ROUNDS = 6
+_ACT_TOOL_LOOP_MAX_ROUNDS = 8
 _LOCATION_CAPABILITY = "location"
 
 
@@ -152,6 +156,8 @@ def make_act_llm_node(
     prompt_dumper: PromptDumper | None = None,
     db: KindredDB | None = None,
     home: HomeProfile | None = None,
+    soul_excerpt_path: Path | None = None,
+    relationship_reader: RelationshipReader | None = None,
 ) -> Callable[[TickState], NodeReturn]:
     """构造绑了 ``client`` 的 T2.act.llm closure，给 ``build.py`` add_node。
 
@@ -186,6 +192,8 @@ def make_act_llm_node(
         prompt_dumper=prompt_dumper,
         db=db,
         home=home,
+        soul_excerpt_path=soul_excerpt_path,
+        relationship_reader=relationship_reader,
     )
 
 
@@ -204,6 +212,8 @@ def _t2_act_llm_impl(
     prompt_dumper: PromptDumper | None = None,
     db: KindredDB | None = None,
     home: HomeProfile | None = None,
+    soul_excerpt_path: Path | None = None,
+    relationship_reader: RelationshipReader | None = None,
 ) -> NodeReturn:
     """T2.act.llm 真实现。
 
@@ -325,6 +335,7 @@ def _t2_act_llm_impl(
         actions_dir=actions_dir,
         resolver=location_resolver,
         home=home,
+        prompt_now_iso=location_triggered_at,
     )
     location_section = location_session.prompt_section() if location_session is not None else ""
     # L5：有进行中目的地计划的拍子，step 引导切 en route 分支——「在路上停在移动
@@ -347,8 +358,104 @@ def _t2_act_llm_impl(
     current_activity = (
         activity_state if kind != "start_activity" and isinstance(activity_state, dict) else None
     )
+    outcome_session = (
+        ActionOutcomeKernelSession(
+            kind=kind,
+            activity_name=effective_activity if isinstance(effective_activity, str) else "",
+            triggered_at=triggered_at if isinstance(triggered_at, str) else None,
+            current_activity=current_activity or {},
+            activities_dir=activities_dir,
+            actions_dir=actions_dir,
+        )
+        if kind in {"start_activity", "advance_activity"}
+        else None
+    )
+    capability_context = host_runtime.execution_context(
+        HostTickContext(
+            config=host_runtime.config,
+            anchor_activity=anchor_activity_for_act(
+                state.get("prev_state") if isinstance(state.get("prev_state"), Mapping) else None,
+                location_kind,
+                effective_activity,
+            ),
+            act_kind=location_kind,
+            tick_id=state.get("tick_id"),
+            triggered_at=location_triggered_at,
+            target=effective_activity,
+            next_state=next_state,
+            activities_dir=activities_dir,
+            actions_dir=actions_dir,
+            db=db,
+            home=home,
+            caches={LOCATION_CANDIDATE_RESOLVER_KEY: location_resolver},
+            provider_handles=host_runtime.provider_handles,
+        )
+    )
+    authorized_capability_names = frozenset(
+        _authorized_act_capability_names(
+            effective_activity,
+            activities_dir=activities_dir,
+            actions_dir=actions_dir,
+            for_end_activity=location_kind == "end_activity",
+        )
+    )
+    capability_tools = host_runtime.registry.visible_tool_defs(
+        authorized_capability_names=authorized_capability_names,
+        context=capability_context,
+    )
+    kernel_tools = location_session.tool_defs if location_session is not None else ()
+    outcome_tools = outcome_session.tool_defs if outcome_session is not None else ()
+    _ensure_distinct_tool_names(capability_tools, kernel_tools, outcome_tools)
+    authorized_tools = capability_tools + kernel_tools + outcome_tools
+    authorization = _ActAuthorization(
+        capability_context=capability_context,
+        authorized_capability_names=authorized_capability_names,
+        authorized_tools=authorized_tools,
+    )
+    tool_context = _ActToolContext(
+        kind=location_kind,
+        capability_registry=host_runtime.registry,
+        authorization=authorization,
+        authorized_tool_names=frozenset(tool.name for tool in authorized_tools),
+        location_session=location_session,
+        effect_session=effect_session,
+        outcome_session=outcome_session,
+    )
     decision_reason_raw = act_decision.get("reason")
     sense_note_raw = state.get("note")
+    expression_section = ""
+    if any(tool.effect == "artifact_write" for tool in authorized_tools):
+        try:
+            soul_excerpt = (
+                soul_excerpt_path.read_text(encoding="utf-8") if soul_excerpt_path else ""
+            )
+        except (OSError, UnicodeError):
+            soul_excerpt = ""
+        expression = project_expression_context(
+            next_state,
+            triggered_at=triggered_at,
+            soul_excerpt=soul_excerpt,
+            sense_note=sense_note_raw,
+            decision_reason=decision_reason_raw,
+            weather_ttl_minutes=host_runtime.config.world.weather_ttl_minutes,
+            weather_location=host_runtime.config.world.weather_location,
+        )
+        expression_section = render_prompt(
+            "expression_context.md.j2", **expression.__dict__
+        ).strip()
+        logger.debug(
+            "expression_context enabled=true section_chars=%s candidates=%s total_chars=%d",
+            {
+                name: len(value) if isinstance(value, str) else len("\n".join(value))
+                for name, value in expression.__dict__.items()
+            },
+            ("ambience",) if expression.ambience else (),
+            len(expression_section),
+        )
+    else:
+        logger.debug(
+            "expression_context enabled=false section_chars={} candidates=() total_chars=0"
+        )
     prompt_context = ActPromptContext(
         triggered_at=triggered_at,
         kind=kind,
@@ -393,10 +500,18 @@ def _t2_act_llm_impl(
             else ()
         ),
         possession_facts_section=render_current_possession_facts(next_state),
+        expression_context_section=expression_section,
+        relationship_summary=_read_relationship_summary(relationship_reader),
         decision_reason=(
-            decision_reason_raw.strip() if isinstance(decision_reason_raw, str) else ""
+            decision_reason_raw.strip()
+            if not expression_section and isinstance(decision_reason_raw, str)
+            else ""
         ),
-        sense_note=sense_note_raw.strip() if isinstance(sense_note_raw, str) else "",
+        sense_note=(
+            sense_note_raw.strip()
+            if not expression_section and isinstance(sense_note_raw, str)
+            else ""
+        ),
         current_engagement=(
             float(current_activity["engagement"])
             if current_activity is not None
@@ -420,20 +535,7 @@ def _t2_act_llm_impl(
         out, tool_loop_trace, tool_loop_debug_events = _complete_act_with_tools(
             client,
             prompt,
-            target=effective_activity,
-            prev_state=state.get("prev_state"),
-            next_state=next_state,
-            activities_dir=activities_dir,
-            actions_dir=actions_dir,
-            home=home,
-            kind=location_kind,
-            tick_id=state.get("tick_id"),
-            triggered_at=location_triggered_at,
-            db=db,
-            location_session=location_session,
-            location_resolver=location_resolver,
-            effect_session=effect_session,
-            host_runtime=host_runtime,
+            context=tool_context,
         )
     except ToolLoopError as exc:
         # M2 契约：工具环可能已经发生不可撤外部效果，不能把 tick raise 掉。
@@ -450,6 +552,8 @@ def _t2_act_llm_impl(
             _tool_event_names(exc.tool_events),
             _tool_event_error_types(exc.tool_events),
         )
+        if outcome_session is not None:
+            logger.debug("T2.act.llm outcome_session=%s", outcome_session.debug_shape())
         if prompt_dumper is not None:
             prompt_dumper.dump(
                 role="act.llm",
@@ -497,7 +601,7 @@ def _t2_act_llm_impl(
     try:
         response = _validate_act_output_schema(out)
     except ActLlmContractError as exc:
-        if effect_session.has_irreversible_send_attempt():
+        if tool_loop_trace:
             return _failed_tool_loop_patch(
                 kind=kind,
                 target=effective_activity,
@@ -542,6 +646,8 @@ def _t2_act_llm_impl(
                 activities_dir=activities_dir,
                 actions_dir=actions_dir,
             )
+            if outcome_session is not None:
+                outcome_session.validate_committed(final_state_diff)
             resolved_state_diff = resolve_inventory_diff(
                 next_state,
                 final_state_diff,
@@ -626,6 +732,9 @@ def _t2_act_llm_impl(
         )
         effect_session.discard()
 
+    if outcome_session is not None:
+        logger.debug("T2.act.llm outcome_session=%s", outcome_session.debug_shape())
+
     if (
         committed
         and effect_session.has_successful_send(tool_trace)
@@ -694,7 +803,7 @@ def _t2_act_llm_impl(
 # ─────────────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(frozen=True)
 class _ActToolContext:
     """act 工具分发上下文。
 
@@ -704,31 +813,25 @@ class _ActToolContext:
 
     kind: str | None
     capability_registry: CapabilityRegistry
-    capability_context: HostExecutionContext
-    authorized_capability_names: frozenset[str]
+    authorization: _ActAuthorization
     authorized_tool_names: frozenset[str]
     location_session: LocationKernelSession | None
     effect_session: CapabilityEffectSession
+    outcome_session: ActionOutcomeKernelSession | None
+
+
+@dataclass(frozen=True)
+class _ActAuthorization:
+    capability_context: HostExecutionContext
+    authorized_capability_names: frozenset[str]
+    authorized_tools: tuple[ToolDef, ...]
 
 
 def _complete_act_with_tools(
     client: ToolCapableLlmClient,
     prompt: str,
     *,
-    target: Any,
-    prev_state: Any,
-    next_state: dict[str, Any],
-    activities_dir: Path,
-    actions_dir: Path,
-    home: HomeProfile | None,
-    kind: str | None,
-    tick_id: int | str | None,
-    triggered_at: str | None,
-    db: KindredDB | None,
-    location_session: LocationKernelSession | None,
-    location_resolver: LocationCandidateResolver,
-    effect_session: CapabilityEffectSession,
-    host_runtime: HostRuntime,
+    context: _ActToolContext,
 ) -> tuple[dict[str, Any], list[Any], list[dict[str, Any]]]:
     """运行 act 工具环；按 ToolDef.effect 执行/暂存，不直接绕过 F1 写 state。"""
     if not isinstance(client, ToolCapableLlmClient):
@@ -736,62 +839,16 @@ def _complete_act_with_tools(
             "T2.act.llm: act requires ToolCapableLlmClient",
         )
 
-    capability_registry = host_runtime.registry
-    host_tick_context = HostTickContext(
-        config=host_runtime.config,
-        anchor_activity=anchor_activity_for_act(
-            prev_state if isinstance(prev_state, Mapping) else None,
-            kind,
-            target,
-        ),
-        act_kind=kind,
-        tick_id=tick_id,
-        triggered_at=triggered_at,
-        target=target,
-        next_state=next_state,
-        activities_dir=activities_dir,
-        actions_dir=actions_dir,
-        db=db,
-        home=home,
-        caches={LOCATION_CANDIDATE_RESOLVER_KEY: location_resolver},
-        provider_handles=host_runtime.provider_handles,
-    )
-    capability_context = host_runtime.execution_context(host_tick_context)
-    authorized_tools = _authorized_act_tool_defs(
-        target,
-        activities_dir=activities_dir,
-        actions_dir=actions_dir,
-        for_end_activity=kind == "end_activity",
-        capability_registry=capability_registry,
-        capability_context=capability_context,
-        location_session=location_session,
-    )
-    context = _ActToolContext(
-        kind=kind,
-        capability_registry=capability_registry,
-        capability_context=capability_context,
-        authorized_capability_names=frozenset(
-            _authorized_act_capability_names(
-                target,
-                activities_dir=activities_dir,
-                actions_dir=actions_dir,
-                for_end_activity=kind == "end_activity",
-            )
-        ),
-        authorized_tool_names=frozenset(tool.name for tool in authorized_tools),
-        location_session=location_session,
-        effect_session=effect_session,
-    )
     logger.debug(
         "T2.act.llm: authorized act tools target=%r kind=%r tools=%s",
-        target,
-        kind,
-        [tool.name for tool in authorized_tools],
+        context.authorization.capability_context.tick.target,
+        context.kind,
+        [tool.name for tool in context.authorization.authorized_tools],
     )
     result = client.complete_with_tools(
         prompt,
         role="act.llm",
-        tools=authorized_tools,
+        tools=context.authorization.authorized_tools,
         handler=lambda call: _handle_act_tool(call, context=context),
         max_rounds=_ACT_TOOL_LOOP_MAX_ROUNDS,
     )
@@ -808,6 +865,8 @@ def _handle_act_tool(
     context: _ActToolContext,
 ) -> ToolResult:
     """act tool adapter registry：核心节点只按名字分发，效果语义由 handler 落地。"""
+    if context.outcome_session is not None and context.outcome_session.handles(call.name):
+        return context.outcome_session.handle(call)
     if context.location_session is not None and context.location_session.handles(call.name):
         if context.kind == "end_activity":
             return ToolResult.error(
@@ -821,40 +880,32 @@ def _handle_act_tool(
                 error_type="UnauthorizedTool",
                 message="tool is not authorized for the current activity",
             )
+        if context.outcome_session is not None:
+            rejected = context.outcome_session.guard_tool(
+                call,
+                owner="location_kernel",
+                binding_id=context.location_session.binding_id_for_call(call),
+            )
+            if rejected is not None:
+                return rejected
         return context.location_session.handle(call)
+    registered = context.capability_registry.registered_tool(call.name)
+    if registered is not None and context.outcome_session is not None:
+        rejected = context.outcome_session.guard_tool(
+            call,
+            owner=registered.capability_name,
+            effect=registered.tool_def.effect,
+        )
+        if rejected is not None:
+            return rejected
     return context.effect_session.consume(
         context.capability_registry.dispatch(
             call,
-            authorized_capability_names=context.authorized_capability_names,
-            context=context.capability_context,
+            authorized_capability_names=context.authorization.authorized_capability_names,
+            context=context.authorization.capability_context,
         ),
         call=call,
     )
-
-
-def _authorized_act_tool_defs(
-    target: Any,
-    *,
-    activities_dir: Path,
-    actions_dir: Path,
-    for_end_activity: bool = False,
-    capability_registry: CapabilityRegistry,
-    capability_context: HostExecutionContext,
-    location_session: LocationKernelSession | None,
-) -> tuple[ToolDef, ...]:
-    authorized_capabilities = _authorized_act_capability_names(
-        target,
-        activities_dir=activities_dir,
-        actions_dir=actions_dir,
-        for_end_activity=for_end_activity,
-    )
-    capability_tools = capability_registry.visible_tool_defs(
-        authorized_capability_names=authorized_capabilities,
-        context=capability_context,
-    )
-    kernel_tools = location_session.tool_defs if location_session is not None else ()
-    _ensure_distinct_tool_names(capability_tools, kernel_tools)
-    return capability_tools + kernel_tools
 
 
 def _authorized_act_capability_names(
@@ -1051,6 +1102,8 @@ def _make_t2_act_llm(
     prompt_dumper: PromptDumper | None = None,
     db: KindredDB | None = None,
     home: HomeProfile | None = None,
+    soul_excerpt_path: Path | None = None,
+    relationship_reader: RelationshipReader | None = None,
 ) -> Callable[[TickState], NodeReturn]:
     """绑定 client、HostRuntime 与 tick 依赖，返回 act closure。"""
     if not isinstance(client, ToolCapableLlmClient):
@@ -1073,9 +1126,26 @@ def _make_t2_act_llm(
             prompt_dumper=prompt_dumper,
             db=db,
             home=home,
+            soul_excerpt_path=soul_excerpt_path,
+            relationship_reader=relationship_reader,
         )
 
     return t2_act_llm_closure
+
+
+def _read_relationship_summary(reader: RelationshipReader | None) -> str:
+    if reader is None:
+        return ""
+    from kindred.relationship import render_relationship_summary
+    from kindred.relationship.preflight import (
+        RelationshipPreflightError,
+        require_user_relationship,
+    )
+
+    try:
+        return render_relationship_summary(require_user_relationship(reader))
+    except RelationshipPreflightError as exc:
+        raise ActLlmContractError(f"T2.act.llm: {exc}") from None
 
 
 def _validate_capability_assembly(
@@ -1089,6 +1159,7 @@ def _validate_capability_assembly(
     _ensure_distinct_tool_names(
         capability_registry.tool_defs(),
         LOCATION_KERNEL_TOOL_DEFS,
+        ACTION_OUTCOME_TOOL_DEFS,
     )
     required: set[str] = set()
     package_errors: list[str] = []

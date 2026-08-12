@@ -87,8 +87,8 @@ def test_signed_delta_entry_same_step_and_end_cadence() -> None:
     entered = _apply(source, {"current_state": "eat", "needs": {"hunger": -25}})
 
     assert entered.next_state["interior"]["needs"]["hunger"] == 55
-    assert entered.next_state["interior"]["needs"]["comfort"] == 56
-    assert entered.next_state["interior"]["needs"]["stimulation"] == 67
+    assert entered.next_state["interior"]["needs"]["comfort"] == 50
+    assert entered.next_state["interior"]["needs"]["stimulation"] == 50
     before_same_step = deepcopy(entered.next_state["interior"])
     repeated = _apply(entered.next_state, {"current_state": "eat"})
     assert repeated.next_state["interior"] == before_same_step
@@ -122,7 +122,7 @@ def test_prompt_and_fixture_expose_engagement_and_signed_delta_contract() -> Non
 
     assert prompt.count("engagement=0.37") == 1
     assert sense_activity.count("engagement：0.37") == 1
-    assert "没有 partner/Grade 也可形成" in sense_contract
+    assert "没有 partner 也可形成" in sense_contract
     assert "只接受 nonzero strict integer delta" in act_contract
     assert mock_end["final_state_diff"]["affect"] == {"clarity": 4}
 
@@ -158,6 +158,6 @@ def test_draw_declares_both_experience_effects() -> None:
     effects = load_atomic_action("draw").state_effects
 
     assert {
-        ("aesthetic", "up", "small"),
+        ("aesthetic", "up", "large"),
         ("stimulation", "up", "small"),
     } <= {(key, value.direction, value.magnitude) for key, value in effects.items()}

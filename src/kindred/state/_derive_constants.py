@@ -134,7 +134,7 @@ ACTIVITY_NEEDS_MULTIPLIERS: Final[dict[str, dict[str, float]]] = {
 AFFECT_BASELINES: Final[dict[str, tuple[int, float]]] = {
     "stress": (20, 0.03),
     "focus": (50, 0.05),
-    "arousal": (20, 0.05),
+    "arousal": (20, 0.02),
     "clarity": (60, 0.04),
 }
 

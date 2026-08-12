@@ -80,6 +80,17 @@ export interface NowResponse {
   empty: boolean
 }
 
+export type RelationshipRole = 'unlabeled' | 'friend' | 'lover' | 'hostile'
+
+/** 当前 Relationship；可信 loopback 观察面展示原始四轴。 */
+export interface RelationshipView {
+  declared_role: RelationshipRole
+  trust: number
+  attachment: number
+  attraction: number
+  friction: number
+}
+
 /** 生命流 / 高光闪回的一条 —— 一个 tick 的轻量摘要。 */
 export interface StreamItem {
   id: number

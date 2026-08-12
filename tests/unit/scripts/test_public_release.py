@@ -145,9 +145,18 @@ def _prepared_repo(
 def test_repository_allowlist_is_an_exact_path_snapshot() -> None:
     root = Path(__file__).resolve().parents[3]
     policy = json.loads((root / "distribution/public-allowlist.json").read_text())
+    tracked = set(
+        subprocess.run(
+            ["git", "-C", str(root), "ls-files"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    )
 
     assert policy["trees"] == []
     assert policy["paths"] == sorted(set(policy["paths"]))
+    assert set(policy["paths"]) <= tracked
 
 
 def test_export_requires_empty_target_and_uses_one_head_snapshot(tmp_path: Path) -> None:

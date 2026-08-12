@@ -309,6 +309,27 @@ def get_recent_ticks(conn: sqlite3.Connection, *, limit: int = 5) -> list[dict[s
     return [_row_to_summary_dict(row) for row in cur.fetchall()]
 
 
+def get_recent_activity_rows(
+    conn: sqlite3.Connection,
+    *,
+    until: str,
+    limit: int = 512,
+) -> list[dict[str, Any]]:
+    """读取 ``until`` 前 24 小时的 ``ts/activity``；供 Sense 折叠生活 run。"""
+    if limit <= 0:
+        return []
+    rows = conn.execute(
+        "SELECT ts, activity FROM tick "
+        "WHERE json_valid(activity) "
+        "AND json_type(activity) = 'object' "
+        "AND julianday(ts) >= julianday(:until) - 1 "
+        "AND julianday(ts) <= julianday(:until) "
+        "ORDER BY ts DESC, id DESC LIMIT :limit",
+        {"until": until, "limit": min(limit, 512)},
+    ).fetchall()
+    return [{"ts": row["ts"], "activity": json.loads(row["activity"])} for row in rows]
+
+
 def get_activity_send_statuses(
     conn: sqlite3.Connection,
     *,

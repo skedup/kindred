@@ -3,13 +3,13 @@ desc: 把脑海里已经成形的画面慢慢画出来
 state_effects:
   aesthetic:
     direction: up
-    magnitude: small
+    magnitude: large
   stimulation:
     direction: up
     magnitude: small
   fatigue:
     direction: up
-    magnitude: small
+    magnitude: medium
 applies_when: 脑海里已有一幅具体画面，确实想把它变成作品
 capabilities:
   - draw

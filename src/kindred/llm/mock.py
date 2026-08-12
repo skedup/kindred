@@ -194,10 +194,41 @@ class MockLlmClient:
         if max_rounds < 1:
             raise ValueError("max_rounds must be >= 1")
         if self.tool_script is None:
+            final = self._act_response()
+            known_tools = tool_map(tuple(tools))
+            default_events: list[ToolEvent] = []
+            diff = final.get("final_state_diff")
+            action_step = diff.get("current_state") if isinstance(diff, dict) else None
+            if (
+                final.get("committed") is True
+                and isinstance(action_step, str)
+                and "lock_action" in known_tools
+            ):
+                lock_call = ToolCall("lock_action", {"action_step": action_step}, "mock-lock")
+                lock_result = call_tool_handler(handler, lock_call)
+                default_events.append(
+                    ToolEvent(
+                        1, lock_call, lock_result, effect_for_tool(known_tools, lock_call.name)
+                    )
+                )
+                if (
+                    not lock_result.is_error
+                    and lock_result.response.get("entry") is True
+                    and "resolve_action_outcome" in known_tools
+                ):
+                    outcome_call = ToolCall("resolve_action_outcome", {}, "mock-outcome")
+                    default_events.append(
+                        ToolEvent(
+                            2,
+                            outcome_call,
+                            call_tool_handler(handler, outcome_call),
+                            effect_for_tool(known_tools, outcome_call.name),
+                        )
+                    )
             return ToolLoopResult(
-                final=self._act_response(),
-                tool_events=(),
-                rounds=1,
+                final=final,
+                tool_events=tuple(default_events),
+                rounds=len(default_events) + 1,
             )
 
         known_tools = tool_map(tuple(tools))
@@ -336,7 +367,6 @@ class MockLlmClient:
                     "add": [],
                     "remove": [],
                 },
-                "mood_subjective": 60,
                 "ambience": "杯沿还温着，屋里安静得像一口慢呼吸。",
             }
 
@@ -363,7 +393,6 @@ class MockLlmClient:
                     ],
                     "remove": [],
                 },
-                "mood_subjective": 58,
                 "ambience": "胃里空了一点，外面的街灯像在招手。",
             }
 
@@ -376,14 +405,13 @@ class MockLlmClient:
                 "act_decision": {
                     "act": True,
                     "kind": "advance_activity",
-                    "target_activity": "study_tech",
+                    "target_activity": "explore_food",
                     "reason": "上一步收尾了，推进下一步。",
                 },
                 "thought_diff": {
                     "add": [],
                     "remove": [],
                 },
-                "mood_subjective": 61,
                 "ambience": "手头的事有了顺滑的惯性，空气里带着一点专注。",
             }
 
@@ -400,7 +428,6 @@ class MockLlmClient:
                     "reason": "终止条件满足：吃满足了。",
                 },
                 "thought_diff": {"add": [], "remove": []},
-                "mood_subjective": 64,
                 "ambience": "吃饱后的余温还在，周围慢慢安静下来。",
             }
 
@@ -418,7 +445,6 @@ class MockLlmClient:
                     # 缺 "reason" 字段
                 },
                 "thought_diff": {"add": [], "remove": []},
-                "mood_subjective": 60,
                 "ambience": "杯沿还温着，屋里安静得像一口慢呼吸。",
             }
 

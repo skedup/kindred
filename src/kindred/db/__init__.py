@@ -76,6 +76,7 @@ from kindred.db.places import (
     get_visit_stats,
     rebuild_place_visits,
 )
+from kindred.db.relationships import RelationshipDataError
 from kindred.db.thoughts import (
     count_thoughts,
     insert_thoughts,
@@ -91,6 +92,7 @@ from kindred.db.ticks import (
     get_episodes_page,
     get_highlight_episodes,
     get_interior_history,
+    get_recent_activity_rows,
     get_recent_ticks,
     get_state_latest,
     get_ticks_for_bundle,
@@ -140,6 +142,7 @@ __all__ = [
     "get_episodes_page",
     "get_highlight_episodes",
     "get_interior_history",
+    "get_recent_activity_rows",
     "get_recent_ticks",
     "get_ticks_for_bundle",
     "get_ticks_page",
@@ -166,6 +169,7 @@ __all__ = [
     "InventoryAddConflictError",
     "InventoryCatalogDataError",
     "InventoryImportConflictError",
+    "RelationshipDataError",
     # ticks: 跨层 reuse 的 8 层字段顺序常量（L-1）
     "STATE_LAYERS",
     # _types

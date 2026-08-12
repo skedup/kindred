@@ -8,7 +8,7 @@
 - device_identity.py  ed25519 设备身份（Gateway v4 self-pairing 握手）
 
 被谁用（这些是「用 adapter 的桥」，属 runtime 编排，不属本层）：
-- runtime/io_bridge.py     心主动 push → 调 GatewayClient.send_chat
+- runtime/io_bridge.py     心主动 push → 调 GatewayClient.send_direct / commit_outbound_context
 - runtime/history_sync.py  拉 chat.history 进表 → 调 GatewayClient.fetch_chat_history
 - runtime/daemon.py        装配 GatewayClient
 

@@ -57,6 +57,9 @@ from kindred.graph._shared._common import (
 )
 from kindred.graph.tick import _bundle_layers as _layers
 from kindred.graph.tick._possession_narrative import current_possession_fact_lines
+from kindred.relationship import render_relationship_summary
+from kindred.relationship.models import RelationshipChange
+from kindred.relationship.preflight import RelationshipReader, require_user_relationship
 from kindred.state.state import State
 from kindred.state.tick import TickState
 
@@ -85,11 +88,14 @@ class PersistDeps:
 
     db: KindredDB
     bundle_path: Path
+    relationship_reader: RelationshipReader | None = None
 
 
 def make_persist_nodes(
     db: KindredDB,
     bundle_path: Path,
+    *,
+    relationship_reader: RelationshipReader | None = None,
 ) -> dict[str, Callable[[TickState], NodeReturn]]:
     """构造 T3 三节点 closure dict。
 
@@ -105,7 +111,11 @@ def make_persist_nodes(
     ``"T3.persist.write_state"`` / ``"T3.persist.write_memory"``
     / ``"T3.persist.flush_bundle"``。
     """
-    deps = PersistDeps(db=db, bundle_path=bundle_path)
+    deps = PersistDeps(
+        db=db,
+        bundle_path=bundle_path,
+        relationship_reader=relationship_reader,
+    )
     return {
         "T3.persist.write_state": _make_write_state(deps),
         "T3.persist.write_memory": _make_write_memory(deps),
@@ -187,15 +197,22 @@ def _write_state_impl(deps: PersistDeps, state: TickState) -> NodeReturn:
         act_result=act_result,
     )
 
-    # 4. 单事务原子写
+    # 4. canonical tick 与可选 Relationship change 同事务原子写
+    relationship_change = state.get("relationship_change")
+    if relationship_change is not None and type(relationship_change) is not RelationshipChange:
+        raise ValueError("t3.persist.write_state: relationship_change invalid")
     with deps.db.transaction():
         tick_id = deps.db.insert_tick(params)
+        if relationship_change is not None:
+            deps.db.apply_relationship_change(relationship_change, tick_id)
     _LOG.info(
-        "T3.persist.write_state tick_id=%s trigger_source=%s significance=%s episode_candidate=%s",
+        "T3.persist.write_state tick_id=%s trigger_source=%s significance=%s "
+        "episode_candidate=%s relationship_change_present=%s",
         tick_id,
         trigger_source,
         params.significance,
         isinstance(params.significance, int) and params.significance >= 7,
+        relationship_change is not None,
     )
 
     return {"tick_id": tick_id}
@@ -362,7 +379,17 @@ def _flush_bundle_impl(deps: PersistDeps, state: TickState) -> NodeReturn:
     next_state = validate_state(next_state_dict)
     now_iso = next_state.time.iso
 
-    now_md = _render_now_section(next_state, state.get("note"), state.get("significance"))
+    relationship_summary = (
+        render_relationship_summary(require_user_relationship(deps.relationship_reader))
+        if deps.relationship_reader is not None
+        else ""
+    )
+    now_md = _render_now_section(
+        next_state,
+        state.get("note"),
+        state.get("significance"),
+        relationship_summary=relationship_summary,
+    )
     layers, recall_ids = _render_history_layers(deps, now_iso)
     bundle_text = "\n\n".join([now_md, *layers])
 
@@ -429,6 +456,8 @@ def _render_now_section(
     state: State,
     note: str | None,
     significance: int | None,
+    *,
+    relationship_summary: str = "",
 ) -> str:
     """09 §4.4.1 NOW 段——固定字段 + 可选增强行。
 
@@ -455,6 +484,8 @@ def _render_now_section(
             f"inner_pulse={interior.inner_pulse.value}"
         ),
     ]
+    if relationship_summary:
+        lines.append(relationship_summary)
     if note:
         lines.append(f"- 心声：{note}")
     if significance is not None:

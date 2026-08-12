@@ -106,11 +106,14 @@ def _sense_response_json_schema() -> dict[str, Any]:
     for field in properties.values():
         field.pop("title", None)
         field.pop("default", None)
-    return {
+    schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "required": source["required"],
     }
+    if "$defs" in source:
+        schema["$defs"] = source["$defs"]
+    return schema
 
 
 class GeminiLlmClientError(LlmClientError):

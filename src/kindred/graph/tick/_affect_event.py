@@ -1,16 +1,13 @@
-"""T1 partner 事件 Affect 方向的 Host-owned 投影。"""
+"""T1 当拍事件 Affect delta 的 Host-owned 投影。"""
 
 from copy import deepcopy
 from typing import Any
 
 from pydantic import ValidationError
 
-from kindred.activity.skill import MAGNITUDE_RANGE
 from kindred.graph.tick._act_contract import safe_validation_error_paths
 from kindred.state._derive import derive_body, derive_inner_pulse
 from kindred.state.state import State
-
-_EVENT_DELTA = sum(MAGNITUDE_RANGE["small"]) // 2
 
 
 class AffectEventProjectionError(ValueError):
@@ -28,16 +25,16 @@ def _validate_state(value: object) -> State:
 
 def apply_affect_event_response(
     next_state: dict[str, Any],
-    response: dict[str, str],
+    response: dict[str, int],
 ) -> tuple[dict[str, Any], frozenset[str]]:
-    """在私有副本应用 fixed-small delta，并只重派 body/inner_pulse。"""
+    """在私有副本应用已校验 signed delta，并只重派 body/inner_pulse。"""
     working = _validate_state(deepcopy(next_state))
     interior = working.interior
     updates = {}
     touched = set()
-    for key, direction in response.items():
+    for key, delta in response.items():
         before = getattr(interior.affect, key)
-        after = max(0, min(100, before + (_EVENT_DELTA if direction == "up" else -_EVENT_DELTA)))
+        after = max(0, min(100, before + delta))
         updates[key] = after
         if after != before:
             touched.add(key)

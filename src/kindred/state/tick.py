@@ -180,6 +180,8 @@ class TickState(TypedDict, total=False):
     act_decision: dict[str, object]  # = ActDecision.model_dump() 的形态
     # 本拍 partner 事件实际改变的 Affect 轴；只协调 T2，不进入 canonical State/T3。
     affect_event_touched: list[str]
+    # Host 已裁决的关系变化；只在本拍 graph 内透传，T3 主事务消费后即丢弃。
+    relationship_change: object
 
     # § E. T2 act 输出——不可空，act=False 时 T2 直接不写该 key
     # 语义：key 缺席 = T2 跳过了 (act=False) 或 T2 还没跑；key 存在 = T2 产出完成。

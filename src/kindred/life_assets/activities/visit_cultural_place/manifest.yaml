@@ -26,6 +26,10 @@ uses:
     intent: 到达后慢慢看展陈、书架、空间与周围细节，让新鲜事物真正进入这一段生活
     bind_places:
       venue: culture_place
+    state_effects:
+      aesthetic:
+        direction: up
+        magnitude: medium
 terminal_when: |
   已经真实到达，并在 explore_place 状态下看够了、注意力已经饱和或有一个感受可以带回来时，就 end_activity。
   任意阶段若查不到合适地点、场所不适合停留、临时失去兴趣或无法继续，也可以如实 end_activity，

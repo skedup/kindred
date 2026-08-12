@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  chmodSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -31,11 +32,11 @@ function fixture() {
   writeFileSync(
     join(configDir, "openclaw-binding.json"),
     JSON.stringify({
-      schema_version: 1,
+      schema_version: 3,
       install_id: "install-a",
       agent_id: ctx.agentId,
       workspace_digest: digest(ctx.workspaceDir),
-      transcript_session_digest: digest(ctx.sessionKey),
+      session_key: ctx.sessionKey,
       peer_scope: {
         message_provider: ctx.messageProvider,
         channel_id_digest: digest(ctx.channelId),
@@ -44,6 +45,7 @@ function fixture() {
       resident_marker_path: marker,
     }),
   );
+  chmodSync(join(configDir, "openclaw-binding.json"), 0o600);
   return { home, ctx, bundle, marker };
 }
 
@@ -108,6 +110,17 @@ test("binding rejects unknown fields and symlinked control files", () => {
     rmSync(f.marker);
     writeFileSync(markerTarget, JSON.stringify({ install_id: "install-a" }));
     symlinkSync(markerTarget, f.marker);
+    assert.equal(loadMouthContext(f.ctx, { home: f.home }), null);
+  } finally {
+    rmSync(f.home, { recursive: true });
+  }
+});
+
+test("binding rejects group or world access", () => {
+  const f = fixture();
+  try {
+    const bindingPath = join(f.home, ".config/kindred/openclaw-binding.json");
+    chmodSync(bindingPath, 0o640);
     assert.equal(loadMouthContext(f.ctx, { home: f.home }), null);
   } finally {
     rmSync(f.home, { recursive: true });

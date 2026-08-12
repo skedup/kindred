@@ -16,8 +16,10 @@
 from __future__ import annotations
 
 import logging
+import math
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -129,6 +131,7 @@ class LocationKernelSession:
     next_state: dict[str, Any]
     home: HomeProfile | None
     resolver: LocationCandidateResolver
+    prompt_now_iso: str | None = None
     _staged: _StagedLocationEvents = field(default_factory=_StagedLocationEvents, init=False)
 
     @classmethod
@@ -142,6 +145,7 @@ class LocationKernelSession:
         actions_dir: Path,
         resolver: LocationCandidateResolver,
         home: HomeProfile | None = None,
+        prompt_now_iso: str | None = None,
     ) -> LocationKernelSession | None:
         """按 effective activity 创建 session；无有效 binding 时不创建空壳。"""
         if not target:
@@ -165,6 +169,7 @@ class LocationKernelSession:
             next_state=next_state,
             home=home,
             resolver=resolver,
+            prompt_now_iso=prompt_now_iso,
         )
 
     @property
@@ -175,9 +180,28 @@ class LocationKernelSession:
     def handles(self, tool_name: str) -> bool:
         return any(tool.name == tool_name for tool in LOCATION_KERNEL_TOOL_DEFS)
 
+    def binding_id_for_call(self, call: ToolCall) -> str | None:
+        """Return a valid model-selected binding for Action ownership checks."""
+        if call.name == _TOOL_CHOOSE_DESTINATION:
+            candidate_ref = call.args.get("candidate_ref")
+            if not isinstance(candidate_ref, str) or not candidate_ref:
+                return None
+            try:
+                candidate = self.resolver.resolve(candidate_ref)
+            except KeyError:
+                return None
+            value = candidate.get("binding_id")
+        else:
+            value = call.args.get("binding_id")
+        return value if isinstance(value, str) and value else None
+
     def prompt_section(self) -> str:
         plans = self.active_destination_plans()
-        plan_lines = _render_destination_plans(plans, is_end=self.kind == "end_activity")
+        plan_lines = _render_destination_plans(
+            plans,
+            is_end=self.kind == "end_activity",
+            now_iso=self.prompt_now_iso,
+        )
         if self.kind == "end_activity":
             return "\n".join(plan_lines)
 
@@ -385,6 +409,7 @@ def _render_destination_plans(
     plans: dict[str, dict[str, Any]],
     *,
     is_end: bool,
+    now_iso: str | None,
 ) -> list[str]:
     if not plans:
         return []
@@ -417,11 +442,36 @@ def _render_destination_plans(
         chosen_at = as_text(plan.get("chosen_at"))
         if chosen_at:
             facts.append(f"chosen_at={chosen_at}")
+            elapsed = _elapsed_minutes(chosen_at, now_iso)
+            if elapsed is not None:
+                facts.append(f"en_route_minutes={elapsed}")
+        snapshot = plan.get("candidate_snapshot")
+        if isinstance(snapshot, dict):
+            distance_km = snapshot.get("distance_km")
+            if (
+                isinstance(distance_km, (int, float))
+                and not isinstance(distance_km, bool)
+                and math.isfinite(float(distance_km))
+            ):
+                if distance_km >= 0:
+                    facts.append(f"distance_km={distance_km:g}")
         lines.append(f"- binding {binding_id}: 「{name}」（{'；'.join(facts)}）")
         address = as_text(plan.get("address"))
         if address:
             lines.append(f"  address={address}")
     return lines
+
+
+def _elapsed_minutes(chosen_at: str, now_iso: str | None) -> int | None:
+    if not now_iso:
+        return None
+    try:
+        elapsed_seconds = (
+            datetime.fromisoformat(now_iso) - datetime.fromisoformat(chosen_at)
+        ).total_seconds()
+    except (TypeError, ValueError):
+        return None
+    return int(elapsed_seconds // 60) if elapsed_seconds >= 0 else None
 
 
 # ─────────────────────────────────────────────────────────────────────

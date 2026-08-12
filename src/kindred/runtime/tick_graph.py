@@ -134,13 +134,13 @@ def build_client_tick_graph(
             client,
             db,
             activities_dir=ACTIVITIES_DIR,
-            actions_dir=ACTIONS_DIR,
             soul_excerpt_path=paths.soul_excerpt,
             soul_full_path=paths.soul_full,
             identity_path=paths.identity,
             user_path=paths.user,
             highlights_path=paths.bundle_highlights,
             prompt_dumper=prompt_dumper,
+            relationship_reader=db,
         ),
         act_llm_node=make_act_llm_node(
             client,
@@ -149,8 +149,10 @@ def build_client_tick_graph(
             host_runtime=host_runtime,
             prompt_dumper=prompt_dumper,
             home=home,
+            soul_excerpt_path=paths.soul_excerpt,
             # L3 PlaceStore：pre-act 本地经验（place_visits exact lookup，只读）。
             db=db,
+            relationship_reader=db,
         ),
-        persist_nodes=make_persist_nodes(db, paths.context_bundle),
+        persist_nodes=make_persist_nodes(db, paths.context_bundle, relationship_reader=db),
     )

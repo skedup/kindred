@@ -99,6 +99,35 @@ def current_possession_fact_lines(state: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def expression_possession_fact_lines(state: Mapping[str, Any]) -> tuple[str, ...]:
+    width = 10
+    embodiment = state.get("embodiment")
+    embodiment = embodiment if isinstance(embodiment, Mapping) else {}
+
+    def names(value: object) -> list[str | None]:
+        return [_display_text(name, max_chars=width) for name in _item_names(value, limit=3)]
+
+    projected_embodiment: dict[str, Any] = {
+        slot: _display_text(_item_name(embodiment.get(slot)), max_chars=width)
+        for slot, _label in _OUTFIT_SLOTS
+    }
+    projected_embodiment.update(
+        accessory=names(embodiment.get("accessory")),
+        makeup=_display_text(embodiment.get("makeup"), max_chars=width),
+    )
+    bag = state.get("bag")
+    bag = bag if isinstance(bag, Mapping) else {}
+    return current_possession_fact_lines(
+        {
+            "embodiment": projected_embodiment,
+            "bag": {
+                "item": _display_text(_item_name(bag.get("item")), max_chars=width),
+                "items": names(bag.get("items")),
+            },
+        }
+    )
+
+
 def render_current_possession_facts(state: Mapping[str, Any]) -> str:
     """为 LLM prompt 渲染带标题的当前 possession 事实块。"""
 
@@ -110,4 +139,8 @@ def render_current_possession_facts(state: Mapping[str, Any]) -> str:
     )
 
 
-__all__ = ["current_possession_fact_lines", "render_current_possession_facts"]
+__all__ = [
+    "current_possession_fact_lines",
+    "expression_possession_fact_lines",
+    "render_current_possession_facts",
+]
