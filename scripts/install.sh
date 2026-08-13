@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION=0.2.0; OPENCLAW_VERSION='OpenClaw 2026.6.10 (aa69b12)'
+VERSION=0.2.1; OPENCLAW_VERSION='OpenClaw 2026.6.10 (aa69b12)'
 BASE_URL=${KINDRED_RELEASE_BASE_URL:-https://github.com/skedup/kindred/releases/download/v$VERSION}
 DATA_HOME=${XDG_DATA_HOME:-"$HOME/.local/share"}; RUNTIME_ROOT="$DATA_HOME/kindred/runtime"
 BIN_DIR="$HOME/.local/bin"

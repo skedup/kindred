@@ -55,7 +55,7 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
     root = Path(__file__).resolve().parents[3]
     inputs = json.loads((root / "distribution/release-inputs.json").read_text())
 
-    assert inputs["release_version"] == "0.2.0"
+    assert inputs["release_version"] == "0.2.1"
     assert set(inputs["platforms"]) == {"macos-arm64", "ubuntu24-x86_64"}
     assert inputs["build_tools"] == {
         "node": "22.18.0",

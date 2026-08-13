@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from kindred.activity import load_activity_skill
 from kindred.capability_host import (
     ArtifactStore,
     CapabilityRegistry,
@@ -68,6 +69,13 @@ class _CaptureClient:
             tool_events=(),
             rounds=1,
         )
+
+
+def test_create_picture_discovery_is_style_neutral() -> None:
+    activity = load_activity_skill("create_picture")
+
+    assert activity.description == "脑海里浮现出一幅具体画面，想把它画下来"
+    assert "安静" not in activity.description
 
 
 def test_soul_excerpt_uses_one_500_character_runtime_contract() -> None:

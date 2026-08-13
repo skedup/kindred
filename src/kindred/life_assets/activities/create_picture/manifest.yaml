@@ -1,5 +1,5 @@
 name: create_picture
-description: 脑海里浮现出一幅具体画面，想把它安静地画下来
+description: 脑海里浮现出一幅具体画面，想把它画下来
 uses:
   - action: draw
     intent: 把已经成形的视觉构思生成一张本地作品

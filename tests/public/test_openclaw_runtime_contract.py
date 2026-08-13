@@ -9,18 +9,31 @@ import shutil
 import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
+from click.testing import CliRunner
 
+from kindred import cli as cli_module
 from kindred.adapters.openclaw.device_identity import DeviceIdentity
 from kindred.adapters.openclaw.gateway import GatewayClient, _RetryableError
+from kindred.cli import cli
 from kindred.config import load_kindred_config
 from kindred.db import KindredDB
 from kindred.openclaw import MOUTH_PLUGIN_DIR, OpenClawWire
 from kindred.openclaw.binding import binding_payload, require_openclaw_binding
 from kindred.openclaw.install import _publish_wire
+from kindred.relationship.models import RelationshipProfile
+from kindred.resident import (
+    PersonaProjection,
+    PersonaTraits,
+    ResidentInitRequest,
+    WorldResolution,
+    initialize_resident,
+)
 from kindred.runtime.daemon import HeartDaemon
 from kindred.runtime.history_sync import HistorySync
 from kindred.runtime.io_bridge import IOBridge, IOBridgeError
@@ -252,6 +265,92 @@ def test_binding_v3_and_wire_publication_share_the_canonical_session(
     published = config_path.read_text(encoding="utf-8")
     assert published.count(_SESSION) == 2
     assert "port: 18789" in published
+
+
+def test_launchagent_run_uses_local_identity_without_openclaw_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, xdg, workspace = tmp_path / "home", tmp_path / "xdg", tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("SOUL.md", "IDENTITY.md", "USER.md"):
+        (workspace / name).write_text(f"synthetic {name}", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    for key, value in {
+        "BAIDU_MAP_AK": "example-map-key",
+        "GEMINI_API_KEY": "example-llm-key",
+        "KINDRED_GATEWAY_TOKEN": "example-gateway-token",
+    }.items():
+        monkeypatch.setenv(key, value)
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+    initialize_resident(
+        ResidentInitRequest(
+            resident_id="resident",
+            agent_id="resident",
+            workspace=workspace.resolve(),
+            life_root=(tmp_path / "life").resolve(),
+            xdg_config_home=xdg.resolve(),
+            home_address="synthetic address",
+            llm_provider="google",
+            llm_model="gemini-test",
+            secrets={
+                "BAIDU_MAP_AK": "example-map-key",
+                "GEMINI_API_KEY": "example-llm-key",
+                "KINDRED_GATEWAY_TOKEN": "example-gateway-token",
+            },
+            install_now=datetime(2026, 8, 13, tzinfo=timezone.utc),
+            persona_write_consent=True,
+        ),
+        project_persona=lambda *_: PersonaProjection(
+            soul_excerpt="synthetic excerpt",
+            traits=PersonaTraits(
+                openness=50,
+                agreeableness=50,
+                conscientiousness=50,
+                awareness=50,
+                eros=50,
+            ),
+        ),
+        resolve_world=lambda *_: WorldResolution(
+            address="synthetic resolved address",
+            city="Synthetic City",
+            timezone="Asia/Shanghai",
+        ),
+    )
+    config_path = xdg / "kindred/config.yaml"
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["openclaw"] = _wire().model_dump(mode="json")
+    raw.setdefault("daemon", {})["session_key"] = _SESSION
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    config = load_kindred_config(config_path)
+    with KindredDB.open(config.paths.db) as db, db.transaction():
+        db.create_relationship(
+            RelationshipProfile(
+                subject_key="user",
+                declared_role="unlabeled",
+                trust=0,
+                attachment=0,
+                attraction=0,
+                friction=0,
+            )
+        )
+    binding = home / ".config/kindred/openclaw-binding.json"
+    binding.parent.mkdir(parents=True)
+    binding.write_text(json.dumps(binding_payload(config)), encoding="utf-8")
+    binding.chmod(0o600)
+    events: list[str] = []
+    monkeypatch.setattr(cli_module, "_configure_observability", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        "kindred.runtime.daemon.run_daemon",
+        lambda loaded, *_args, **_kwargs: events.append(loaded.openclaw.transcript_session) or 0,
+    )
+
+    result = CliRunner().invoke(cli, ["run", "--config", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert events == [_SESSION]
 
 
 def test_installer_orders_relationship_wire_doctor_and_service(
