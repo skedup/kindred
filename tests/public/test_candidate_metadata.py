@@ -16,7 +16,7 @@ from kindred.openclaw.install import _plugin_tree_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "https://github.com/skedup/kindred"
-RELEASE = f"{REPOSITORY}/releases/download/v0.2.0"
+RELEASE = f"{REPOSITORY}/releases/download/v0.2.1"
 
 
 def _load_release_builder() -> Any:
@@ -34,7 +34,7 @@ def test_root_and_capability_metadata_use_the_public_upstream() -> None:
 
     for path in projects:
         project = tomllib.loads(path.read_text(encoding="utf-8"))["project"]
-        expected_version = "0.2.0" if path == ROOT / "pyproject.toml" else "0.1.0"
+        expected_version = "0.2.1" if path == ROOT / "pyproject.toml" else "0.1.0"
         assert project["version"] == expected_version
         assert project["urls"]["Repository"] == REPOSITORY
         assert project["urls"]["Issues"] == f"{REPOSITORY}/issues"
@@ -72,8 +72,8 @@ def test_release_snapshot_uses_root_version_and_packaged_plugin_identity() -> No
         (ROOT / "src/kindred/openclaw/mouth_plugin/package.json").read_text(encoding="utf-8")
     )
 
-    assert inputs["release_version"] == "0.2.0"
-    assert root_row[1:4] == ["0.2.0", ".", "kindred-0.2.0-py3-none-any.whl"]
+    assert inputs["release_version"] == "0.2.1"
+    assert root_row[1:4] == ["0.2.1", ".", "kindred-0.2.1-py3-none-any.whl"]
     assert builder._plugin_version(ROOT) == plugin["version"] == "0.3.0"
 
 

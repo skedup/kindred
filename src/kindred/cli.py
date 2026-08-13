@@ -135,7 +135,7 @@ def _require_openclaw_binding(config: KindredConfig) -> None:
 
 
 def _require_openclaw_runtime(config: KindredConfig) -> None:
-    """Heart 启动前确认 binding v3 与 packaged Mouth Plugin v3 一致。"""
+    """显式 start 前确认 OpenClaw、binding v3 与 packaged Plugin v3 一致。"""
     from kindred.openclaw.binding import OpenClawBindingError
     from kindred.openclaw.install import OpenClawInstallError, require_openclaw_runtime
 
@@ -600,7 +600,7 @@ def run(
         debug_dump_dir=debug_dump_dir,
     )
     _require_resident_commit(config)
-    _require_openclaw_runtime(config)
+    _require_openclaw_binding(config)
     _require_relationship_runtime(config)
     prompt_dumper = _configure_observability(config, log_file=config.daemon.log_file)
     from kindred.runtime.daemon import run_daemon

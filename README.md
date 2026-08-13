@@ -10,7 +10,7 @@ optionally performs one activity step, validates the complete state, and then
 persists the result. OpenClaw provides the conversation surface; portable
 capability packages add optional tools without changing the core graph.
 
-> **Public Preview:** `v0.2.0` supports one resident on one trusted host. It is
+> **Public Preview:** `v0.2.1` supports one resident on one trusted host. It is
 > intended for operators who are comfortable reviewing local configuration and
 > running pre-release software. This preview supports fresh installs only. Use a
 > fresh user/HOME; the installer refuses to overwrite a different preview version.
@@ -37,14 +37,14 @@ interactive installer:
 
 ```sh
 curl -fsSL \
-  https://github.com/skedup/kindred/releases/download/v0.2.0/install.sh \
+  https://github.com/skedup/kindred/releases/download/v0.2.1/install.sh \
   | sh
 ```
 
 To inspect the bootstrap first:
 
 ```sh
-curl -fLO https://github.com/skedup/kindred/releases/download/v0.2.0/install.sh
+curl -fLO https://github.com/skedup/kindred/releases/download/v0.2.1/install.sh
 less install.sh
 sh install.sh
 ```
