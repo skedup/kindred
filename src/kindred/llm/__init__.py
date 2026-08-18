@@ -14,6 +14,7 @@
 - gemini_client.py       GeminiLlmClient——走 Google Generative Language API（免费 gemini）
 - deepseek_client.py     DeepSeekLlmClient——走 DeepSeek Chat Completions + Tool Calls
 - openai_client.py       OpenAILlmClient——走 OpenAI Responses API + Function Calling
+- xai_client.py          XaiLlmClient——走 xAI Responses API + Function Calling
 - factory.py            build_llm_client——按 config 选 provider
 - prompts/              jinja2 模板（progressive disclosure，按需加载）
 """
@@ -46,6 +47,7 @@ from kindred.llm.tools import (
     ToolEvent,
     ToolLoopResult,
 )
+from kindred.llm.xai_client import XaiLlmClient, XaiLlmClientError
 
 __all__ = [
     "AnthropicLlmClient",
@@ -71,5 +73,7 @@ __all__ = [
     "ToolEvent",
     "ToolLoopError",
     "ToolLoopResult",
+    "XaiLlmClient",
+    "XaiLlmClientError",
     "build_llm_client",
 ]

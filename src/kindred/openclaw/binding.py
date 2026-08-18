@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from kindred.config import KindredConfig
+from kindred.mouth_host.model import OpenClawRuntimeModel
 
 
 class OpenClawBindingError(RuntimeError):
@@ -19,20 +20,19 @@ class OpenClawBindingError(RuntimeError):
 
 def binding_payload(config: KindredConfig) -> dict[str, Any]:
     """从私有 wire 生成稳定的 Plugin 授权 binding。"""
-    resident, wire = config.resident, config.openclaw
+    resident, model = config.resident, config.mouth_host
     if (
-        wire is None
+        not isinstance(model, OpenClawRuntimeModel)
         or not resident.install_id
-        or not resident.agent_id
-        or resident.workspace is None
         or resident.marker_path is None
     ):
         raise OpenClawBindingError("Resident or OpenClaw wire is incomplete")
+    wire = model.wire
     return {
         "schema_version": 3,
         "install_id": resident.install_id,
-        "agent_id": resident.agent_id,
-        "workspace_digest": _digest(str(resident.workspace)),
+        "agent_id": model.agent_id,
+        "workspace_digest": _digest(str(model.workspace)),
         "session_key": wire.transcript_session,
         "peer_scope": {
             "message_provider": wire.approved_peer.provider,
@@ -47,7 +47,7 @@ def require_openclaw_binding(
     config: KindredConfig, *, home: Path | None = None
 ) -> dict[str, Any] | None:
     """Config 已含 wire 时，固定 binding 与 Resident marker 必须 exact match。"""
-    if config.openclaw is None:
+    if not isinstance(config.mouth_host, OpenClawRuntimeModel):
         return None
     path = (home or Path.home()) / ".config/kindred/openclaw-binding.json"
     try:

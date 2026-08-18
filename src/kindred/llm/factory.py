@@ -10,9 +10,10 @@
   ``DEEPSEEK_API_KEY``）
 - ``provider=openai`` → ``OpenAILlmClient``（走 OpenAI Responses API，
   ``OPENAI_API_KEY``）
+- ``provider=xai`` → ``XaiLlmClient``（走 xAI Responses API，``XAI_API_KEY``）
 daemon ``_open_client`` 调本工厂；节点代码零改动（只认 ``LlmClient`` Protocol）。
 合法取值由 config loader 已校验
-（claude_code|anthropic|google|deepseek|openai），
+（claude_code|anthropic|google|deepseek|openai|xai），
 故此处只分支不再校验。
 
 返回 ``ManagedLlmClient``（= ``LlmClient`` + ``close()``）：各 Provider client 都满足；daemon
@@ -28,6 +29,7 @@ from kindred.llm.claude_code_client import ClaudeCodeLlmClient
 from kindred.llm.deepseek_client import DeepSeekLlmClient
 from kindred.llm.gemini_client import GeminiLlmClient
 from kindred.llm.openai_client import OpenAILlmClient
+from kindred.llm.xai_client import XaiLlmClient
 
 if TYPE_CHECKING:
     from kindred.config import KindredConfig
@@ -51,6 +53,8 @@ def build_llm_client(config: KindredConfig) -> ManagedLlmClient:
         return GeminiLlmClient.from_config(llm)
     if llm.provider == "deepseek":
         return DeepSeekLlmClient.from_config(llm)
+    if llm.provider == "xai":
+        return XaiLlmClient.from_config(llm)
     return OpenAILlmClient.from_config(llm)
 
 

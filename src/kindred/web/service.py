@@ -34,8 +34,13 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Any, TypeGuard
+import hashlib
+import logging
+import threading
+from collections.abc import Collection
+from typing import TYPE_CHECKING, Any, TypeGuard
 
+from kindred.activity import list_registered_actions
 from kindred.capability_host.artifacts import (
     ArtifactStore,
     ArtifactStoreError,
@@ -60,8 +65,15 @@ from kindred.web.contracts import (
     StreamItem,
     StreamResponse,
     ThoughtView,
+    VisualActionV1,
+    VisualStateEmptyV1,
+    VisualStateReadyV1,
+    VisualStateV1,
 )
 from kindred_capability_sdk import ArtifactDescriptor
+
+if TYPE_CHECKING:
+    from kindred.db import KindredDB
 
 # interior.needs 的 7 个维度（与 state/interior.py::Needs 对齐）
 _NEEDS_KEYS = (
@@ -84,9 +96,78 @@ _PROFILE_LABELS = {
 }
 _ROLE_ORDER = {"title": 0, "content": 1, "image": 2, "file": 3}
 _TEXT_LIMIT, _IMAGE_LIMIT = 64 * 1024, 8 * 1024 * 1024
+_VISUAL_LOG = logging.getLogger("kindred.web.visual_state")
+_VISUAL_SOURCE_DOMAIN = b"kindred.visual-source.v1\0"
+_RESERVED_VISUAL_ACTIONS = frozenset({"settle"})
 
 
 ArtifactProjection = tuple[ArtifactDetailResponse, tuple[str, ...]]
+
+
+class VisualStateProjectionError(RuntimeError):
+    """Latest committed row cannot satisfy the strict V1 projection contract."""
+
+
+def derive_visual_source_id(install_id: str) -> str:
+    """Derive a stable opaque, non-secret source id from a committed install id."""
+    if not install_id.strip():
+        raise VisualStateProjectionError("resident install identity is unavailable")
+    digest = hashlib.sha256(_VISUAL_SOURCE_DOMAIN + install_id.encode("utf-8")).hexdigest()
+    return f"install:{digest[:32]}"
+
+
+class VisualStateProjector:
+    """Project latest committed state and cache its motion boundary by revision."""
+
+    def __init__(
+        self,
+        install_id: str,
+        *,
+        registered_actions: Collection[str] | None = None,
+    ) -> None:
+        self.source_id = derive_visual_source_id(install_id)
+        actions = list_registered_actions() if registered_actions is None else registered_actions
+        self._actions = frozenset(actions) | _RESERVED_VISUAL_ACTIONS
+        self._cache_lock = threading.Lock()
+        self._cached_revision: int | None = None
+        self._cached_motion_start: int | None = None
+
+    def project(self, db: KindredDB) -> VisualStateV1:
+        """Build an empty or ready snapshot from one read-only database handle."""
+        latest = db.get_state_latest()
+        if latest is None:
+            return VisualStateEmptyV1(source_id=self.source_id)
+        revision = latest.get("id")
+        committed_at = latest.get("ts")
+        if not _is_int(revision) or revision < 1 or not isinstance(committed_at, str):
+            raise VisualStateProjectionError("latest tick identity is malformed")
+        activity = _as_dict(latest.get("activity"))
+        raw_step = activity.get("step")
+        action: VisualActionV1 | None = None
+        if isinstance(raw_step, str) and raw_step in self._actions:
+            action = VisualActionV1(name=raw_step)
+        elif raw_step is not None:
+            _VISUAL_LOG.info("visual_state_projection diagnostic=invalid_action_semantic")
+        motion_start = self._motion_start(db, revision)
+        return VisualStateReadyV1(
+            source_id=self.source_id,
+            revision=revision,
+            committed_at=committed_at,
+            motion_instance_id=f"tick:{motion_start}",
+            action=action,
+        )
+
+    def _motion_start(self, db: KindredDB, revision: int) -> int:
+        with self._cache_lock:
+            if self._cached_revision == revision and self._cached_motion_start is not None:
+                return self._cached_motion_start
+            start = db.get_motion_instance_start_id(latest_tick_id=revision)
+            if start is None:
+                _VISUAL_LOG.info("visual_state_projection diagnostic=malformed_history")
+                start = revision
+            self._cached_revision = revision
+            self._cached_motion_start = start
+            return start
 
 
 def encode_artifact_cursor(tick_id: int, artifact_ordinal: int) -> str:

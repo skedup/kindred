@@ -200,9 +200,7 @@ def _render_summarize_prompt(
             continue
         lines.append(f"[{m.role}] {text}")
     body = "\n".join(lines) or "（昨日窗口内无可读消息）"
-    return render_prompt(
-        "dream_summarize.md.j2", dream_date=dream_date, messages_block=body
-    )
+    return render_prompt("dream_summarize.md.j2", dream_date=dream_date, messages_block=body)
 
 
 def _validate_summary_response(out: object) -> str:

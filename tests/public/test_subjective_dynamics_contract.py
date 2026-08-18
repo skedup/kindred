@@ -17,7 +17,10 @@ from kindred.graph.tick._act_prompt import (
 )
 from kindred.graph.tick._state_transition import StateTransitionApplier
 from kindred.graph.tick.act_llm import _t2_act_llm_impl
-from kindred.graph.tick.sense_llm import _render_current_activity
+from kindred.graph.tick.sense_llm import (
+    _load_current_activity_context,
+    _render_current_activity,
+)
 from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
 from kindred.llm.mock import MockLlmClient
 from kindred.llm.real_client import act_tool_loop_system_prompt_for, system_prompt_for
@@ -115,7 +118,9 @@ def test_prompt_and_fixture_expose_engagement_and_signed_delta_contract() -> Non
             current_engagement=0.37,
         )
     )
-    sense_activity = _render_current_activity(_state(), ACTIVITIES_DIR)
+    sense_activity = _render_current_activity(
+        _load_current_activity_context(_state(), activities_dir=ACTIVITIES_DIR)
+    )
     sense_contract = system_prompt_for("sense.llm")
     act_contract = act_tool_loop_system_prompt_for(())
     mock_end = MockLlmClient(scenario="end_activity").complete("fixture", role="act.llm")

@@ -37,7 +37,11 @@ _RISK_TERMS = (
 
 WRITE_COMPOSE = ToolDef(
     name="write_compose",
-    description="为当前活动起草一份可在后续拍显式消费的作品。",
+    description=(
+        "为当前活动起草作品并暂存为 Artifact；只有本拍最终 committed=true 才会正式提交。"
+        "落点由 Host 根据当前活动推导，不传路由字段；正式 artifact_ref 从后续 tick 起才可被"
+        "显式消费。正文、标题、语气和来源必须来自当前活动的真实材料。"
+    ),
     effect="artifact_write",
     parameters={
         "type": "OBJECT",

@@ -5,7 +5,6 @@
 
 子包 / 模块：
 - openclaw/         OpenClaw 平台适配（gateway WS JSON-RPC + v4 device pairing）✅已实现
-- wecom.py          企业微信（目前发消息走 OpenClaw 通道，本模块暂未独立实现）
 
 未来可扩展：telegram/ · discord/ · signal/ …（照 openclaw/gateway.py 的形状新建）
 

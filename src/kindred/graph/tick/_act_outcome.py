@@ -86,16 +86,13 @@ class ActionOutcomeKernelSession:
         call: ToolCall,
         *,
         owner: str,
-        effect: str = "",
+        allow_before_action_lock: bool = False,
         binding_id: str | None = None,
     ) -> ToolResult | None:
         if rejected := self._after_outcome(call):
             return rejected
         if self.locked_action is None:
-            allowed = call.name == "choose_destination" or (
-                effect == "read_only" and call.name in {"find_places", "list_inventory"}
-            )
-            return None if allowed else _error(call, "ActionLockRequired")
+            return None if allow_before_action_lock else _error(call, "ActionLockRequired")
         if owner in {"location", "location_kernel"}:
             binding_id = binding_id or _text(call.args.get("binding_id"))
             if binding_id is None:

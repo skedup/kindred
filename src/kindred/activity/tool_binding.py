@@ -44,25 +44,6 @@ def action_names_declaring_capability(
     return tuple(result)
 
 
-def activity_declares_capability(
-    target: Any,
-    capability_name: str,
-    *,
-    activities_dir: Path | None,
-    actions_dir: Path | None,
-) -> bool:
-    """当前 activity 是否至少有一个 action 绑定了 ``capability_name``。"""
-
-    return bool(
-        action_names_declaring_capability(
-            target,
-            capability_name,
-            activities_dir=activities_dir,
-            actions_dir=actions_dir,
-        )
-    )
-
-
 def declared_capability_names_for_activity(
     target: Any,
     *,
@@ -120,7 +101,6 @@ def _load_activity(target: Any, activities_dir: Path, actions_dir: Path) -> Acti
 
 __all__ = [
     "action_names_declaring_capability",
-    "activity_declares_capability",
     "declared_capability_names_for_activity",
     "step_is_before_any_action",
 ]

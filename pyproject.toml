@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kindred"
-version = "0.2.1"
-description = "OpenClaw-native runtime for an autonomous AI resident"
+version = "0.3.0"
+description = "Autonomous AI resident runtime for OpenClaw and Hermes Mouth hosts"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -108,6 +108,9 @@ only-include = [
 
 [tool.hatch.build.targets.sdist.force-include]
 "src/kindred/web/static" = "src/kindred/web/static"
+
+[tool.uv]
+required-version = "==0.8.13"
 
 [tool.uv.workspace]
 members = ["packages/*"]

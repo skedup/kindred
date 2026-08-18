@@ -25,7 +25,7 @@ function fixture() {
     workspaceDir: join(home, "workspace"),
     sessionKey: "synthetic-session-a",
     messageProvider: "telegram",
-    channelId: "synthetic-peer-a",
+    channelId: "telegram:synthetic-peer-a",
   };
   writeFileSync(bundle, "synthetic bundle\n");
   writeFileSync(marker, JSON.stringify({ install_id: "install-a" }));
@@ -49,10 +49,22 @@ function fixture() {
   return { home, ctx, bundle, marker };
 }
 
-test("only the approved peer receives the bundle", () => {
+test("approved peer supports legacy and split channel identities", () => {
   const f = fixture();
   try {
     assert.equal(loadMouthContext(f.ctx, { home: f.home }), "synthetic bundle");
+    assert.equal(
+      loadMouthContext({ ...f.ctx, channelId: "synthetic-peer-a" }, { home: f.home }),
+      "synthetic bundle",
+    );
+  } finally {
+    rmSync(f.home, { recursive: true });
+  }
+});
+
+test("other peers and providers remain excluded", () => {
+  const f = fixture();
+  try {
     assert.equal(
       loadMouthContext({ ...f.ctx, channelId: "synthetic-peer-b" }, { home: f.home }),
       null,
@@ -62,7 +74,10 @@ test("only the approved peer receives the bundle", () => {
       null,
     );
     assert.equal(
-      loadMouthContext({ ...f.ctx, messageProvider: "other" }, { home: f.home }),
+      loadMouthContext(
+        { ...f.ctx, messageProvider: "other", channelId: "telegram:synthetic-peer-a" },
+        { home: f.home },
+      ),
       null,
     );
     assert.equal(

@@ -32,6 +32,7 @@ LIST_INVENTORY = ToolDef(
         "state diff."
     ),
     effect="read_only",
+    allow_before_action_lock=True,
     parameters={
         "type": "OBJECT",
         "properties": {"scope": {"type": "STRING", "enum": ["outfit", "bag"]}},

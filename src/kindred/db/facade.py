@@ -234,12 +234,12 @@ class KindredDB:
         raise ``OperationalError``；库存在但未建表 → 读视图时 raise。
         调用方应先用 ``db_path.exists()`` + 读方法 try 兜底（web 层即如此）。
         """
-        _LOG.debug("db.open_readonly path=%s", db_path)
+        _LOG.debug("db.open_readonly")
         conn = _conn_mod.connect_readonly(db_path)
         try:
             yield cls._create(conn)
         finally:
-            _LOG.debug("db.close (ro) path=%s", db_path)
+            _LOG.debug("db.close (ro)")
             conn.close()
 
     # ─── 事务 ─────────────────────────────────────────────────
@@ -382,6 +382,17 @@ class KindredDB:
     def get_state_latest(self) -> dict[str, Any] | None:
         """读最新 tick（state_latest 视图）。"""
         return _ticks_mod.get_state_latest(self._conn)
+
+    def validate_visual_state_schema(self) -> None:
+        """校验 visual snapshot 实际依赖的最小只读 schema。"""
+        _ticks_mod.validate_visual_state_schema(self._conn)
+
+    def get_motion_instance_start_id(self, *, latest_tick_id: int) -> int | None:
+        """读当前连续 ``(activity.started_at, activity.step)`` 的起始 tick id。"""
+        return _ticks_mod.get_motion_instance_start_id(
+            self._conn,
+            latest_tick_id=latest_tick_id,
+        )
 
     def get_inventory_item(self, item_key: str) -> InventoryItem | None:
         """按稳定 key exact lookup；不存在返回 ``None``。"""
@@ -609,6 +620,21 @@ class KindredDB:
             now_ms=now_ms,
         )
 
+    def get_latest_visible_partner_expression(
+        self,
+        *,
+        session_key: str,
+        cursor: tuple[int, int, int],
+        now_ms: int,
+    ) -> int | None:
+        """取当前已读范围内最近的 partner 可见表达时间，不返回正文。"""
+        return _messages_mod.get_latest_visible_partner_expression(
+            self._conn,
+            session_key=session_key,
+            cursor=cursor,
+            now_ms=now_ms,
+        )
+
     # ── watcher_cursor（「心已读书签」持久化；运行期写权收敛到 sense_io）──
 
     def get_watcher_cursor(self, *, session_key: str) -> tuple[int, int, int] | None:
@@ -653,7 +679,11 @@ class KindredDB:
         return _places_mod.get_visit_stats(self._conn, place_keys)
 
     def rebuild_place_visits(self) -> int:
-        """清空并从 tick 历史重建 ``place_visits``（第四趴 §8）；返回重建行数。需在事务内。"""
+        """清空并从 tick 历史重建 ``place_visits``；返回重建行数。
+
+        需在事务内调用；生产操作步骤见
+        ``docs/17-inventory-catalog-operations.md`` §7。
+        """
         self._require_transaction("rebuild_place_visits")
         return _places_mod.rebuild_place_visits(self._conn)
 

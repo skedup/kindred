@@ -56,7 +56,7 @@ follow-up 小 PR 会迁到 ``state/_layers.py`` 或从 ``State.model_fields`` �
 （"db 拥有 state schema"）自然消除。
 
 文档漂移记录：02 §3.10.1 示例 SQL 列顺序与本列表不同，已在
-``docs/discussions/2026-06-02-spec-bug-3.10-column-order.md`` 留指针；
+``docs/archive/discussions/2026-06/2026-06-02-spec-bug-3.10-column-order.md`` 留指针；
 应以本列表（= state.py 运行时 model_fields 顺序）为准，
 下一个文档 sync MR 会修齐 02 示例。
 """
@@ -75,6 +75,14 @@ _STREAM_COLS = "id, ts, note, significance, act_decision"
 
 _INTERIOR_HISTORY_COLS = "id, ts, trigger_source, interior, activity, note, significance"
 """web /interior/history 专用窄列；不读取其余 6 层 state 或 act JSON。"""
+
+_VISUAL_STATE_REQUIRED_COLS = (
+    "id",
+    "ts",
+    *STATE_LAYERS,
+    *_NULLABLE_JSON_COLUMNS,
+)
+"""Visual snapshot 读取 ``state_latest`` 时实际依赖的最小 schema。"""
 
 EPISODE_RECALL_INITIAL_COOLDOWN: int = 100
 """新 episode 插入 episode_recall 时的初始冷却度（09 §4.4.4.2）。"""
@@ -280,6 +288,71 @@ def get_state_latest(conn: sqlite3.Connection) -> dict[str, Any] | None:
     if row is None:
         return None
     return _row_to_dict(row)
+
+
+def validate_visual_state_schema(conn: sqlite3.Connection) -> None:
+    """Validate only the schema invariants required by the visual snapshot.
+
+    ``schema_version`` proves that the migration marker was written, but a
+    read-only observer must still fail closed if its view is missing columns.
+    ``state_latest`` remains the read authority; re-checking its result against
+    ``MAX(tick.id)`` on every request would duplicate that view's responsibility
+    and allow concurrent commits to create a false mismatch.
+    """
+    columns = ", ".join(_VISUAL_STATE_REQUIRED_COLS)
+    conn.execute(f"SELECT {columns} FROM state_latest LIMIT 0")  # noqa: S608
+
+
+def get_motion_instance_start_id(
+    conn: sqlite3.Connection,
+    *,
+    latest_tick_id: int,
+) -> int | None:
+    """Return the first tick id in the latest contiguous action occurrence.
+
+    The occurrence signature is exactly ``(activity.started_at, activity.step)``.
+    Rows are traversed by committed ``id DESC`` order, never timestamp order.  A
+    malformed or missing row returns ``None`` so the caller can conservatively use
+    ``latest_tick_id`` instead of accidentally merging two distinct occurrences.
+
+    ``step=None`` is a valid signature component for bootstrap and legacy state.
+    """
+    if latest_tick_id < 1:
+        return None
+    rows = conn.execute(
+        "SELECT id, activity FROM tick WHERE id <= :latest_tick_id ORDER BY id DESC",
+        {"latest_tick_id": latest_tick_id},
+    )
+    expected_signature: tuple[str, str | None] | None = None
+    occurrence_start = latest_tick_id
+    saw_latest = False
+    for row in rows:
+        row_id = row["id"]
+        if not isinstance(row_id, int):
+            return None
+        if not saw_latest:
+            if row_id != latest_tick_id:
+                return None
+            saw_latest = True
+        try:
+            activity = json.loads(row["activity"])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(activity, dict):
+            return None
+        started_at = activity.get("started_at")
+        step = activity.get("step")
+        if not isinstance(started_at, str) or not started_at:
+            return None
+        if step is not None and (not isinstance(step, str) or not step):
+            return None
+        signature = (started_at, step)
+        if expected_signature is None:
+            expected_signature = signature
+        elif signature != expected_signature:
+            break
+        occurrence_start = row_id
+    return occurrence_start if saw_latest else None
 
 
 def get_recent_ticks(conn: sqlite3.Connection, *, limit: int = 5) -> list[dict[str, Any]]:

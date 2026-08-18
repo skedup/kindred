@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
     from kindred.config import KindredConfig
     from kindred.llm.client import ManagedLlmClient
+    from kindred.mouth_host.composition import HostPreparation
     from kindred.observability import PromptDumper
     from kindred.runtime.history_sync import HistorySync
     from kindred.runtime.io_bridge import IOBridge
@@ -115,6 +116,7 @@ class HeartDaemon:
         # io_bridge 可注入（测试）；run() 路径下若 gateway.token 已配则构造真
         # IOBridge（心主动 push 出向桥，codex N-1），否则 None（不 push，降级）。
         self._io_bridge = io_bridge
+        self._host_preparation: HostPreparation | None = None
         # watcher 可注入（测试）；run() 路径下若为 None 会用真 db 构造。
         # _loop 路径下为 None 表示不启用 watcher（只跑 heartbeat，向后兼容）。
         self._watcher = watcher
@@ -194,7 +196,7 @@ class HeartDaemon:
         if not isinstance(client, ToolCapableLlmClient):
             logger.error(
                 "failed to init tick graph: act requires ToolCapableLlmClient; "
-                "configure a tool-capable llm.provider such as google/deepseek/openai"
+                "configure a tool-capable llm.provider such as google/deepseek/openai/xai"
             )
             client.close()
             lease.release()
@@ -203,6 +205,8 @@ class HeartDaemon:
         try:
             with ExitStack() as resources:
                 db = resources.enter_context(KindredDB.open(db_path))
+                if self._io_bridge is None or self._history_sync is None:
+                    self._host_preparation = self._prepare_mouth_host()
                 # 心经 Gateway 出向（io_bridge）+ 拉 chat.history（history_sync）。
                 # io_bridge 先于 graph 构造，才能注入进去（codex N-1：生产路径依赖注入）；
                 # 经 Gateway ws 出向（token 缺失降级 None）。
@@ -243,54 +247,44 @@ class HeartDaemon:
         logger.info("daemon stopped after %d tick(s)", self._tick_count)
         return self._tick_count
 
-    def _build_history_sync(self, db: KindredDB) -> HistorySync | None:
-        """只为已验证的 OpenClaw wire 构造 HistorySync。
-
-        wire 缺失时 daemon 仍可运行 heartbeat + watcher，但不拉取 Gateway transcript。
-        """
+    def _prepare_mouth_host(self) -> HostPreparation | None:
         from kindred.adapters.openclaw.gateway import GatewayClient, GatewayError
+        from kindred.mouth_host.composition import prepare_host
+        from kindred.mouth_host.model import OpenClawRuntimeModel
+
+        model = self._config.mouth_host
+        if model is None:
+            logger.warning("Mouth host disabled: verified binding is absent")
+            return None
+        try:
+            if isinstance(model, OpenClawRuntimeModel):
+                gateway = GatewayClient.from_config(
+                    self._config.gateway,
+                    identity_path=self._config.paths.life_root / ".device-identity.json",
+                )
+                return prepare_host(model, openclaw_gateway=gateway)
+            return prepare_host(model)
+        except GatewayError as exc:
+            logger.warning("Mouth host unavailable error_type=%s", type(exc).__name__)
+            return None
+
+    def _build_history_sync(self, db: KindredDB) -> HistorySync | None:
+        host = self._host_preparation or self._prepare_mouth_host()
+        if host is None:
+            return None
         from kindred.runtime.history_sync import HistorySync
 
-        wire = self._config.openclaw
-        if wire is None:
-            logger.warning("history sync disabled: verified OpenClaw wire is absent")
-            return None
-        identity_path = self._config.paths.life_root / ".device-identity.json"
-        try:
-            client = GatewayClient.from_config(self._config.gateway, identity_path=identity_path)
-        except GatewayError as exc:
-            logger.warning(
-                "history sync disabled (no real source): %s; daemon runs heartbeat+watcher only",
-                exc,
-            )
-            return None
         logger.info("history sync enabled for verified direct peer")
-        return HistorySync(client, db, wire=wire)
+        return HistorySync(host.transcript, db)
 
     def _build_io_bridge(self) -> IOBridge | None:
-        """只为已验证的 OpenClaw wire 构造心主动 push 的 IOBridge。
-
-        出向固定走同源 transcript 与 route，不使用最近 session 或 web-only fallback。
-        wire 缺失时 daemon 继续运行，但不提供 ``send_to_user``。
-        """
-        from kindred.adapters.openclaw.gateway import GatewayClient, GatewayError
+        host = self._host_preparation or self._prepare_mouth_host()
+        if host is None:
+            return None
         from kindred.runtime.io_bridge import IOBridge
 
-        wire = self._config.openclaw
-        if wire is None:
-            logger.warning("heart push disabled: verified OpenClaw wire is absent")
-            return None
-        identity_path = self._config.paths.life_root / ".device-identity.json"
-        try:
-            client = GatewayClient.from_config(self._config.gateway, identity_path=identity_path)
-        except GatewayError as exc:
-            logger.warning(
-                "heart push disabled (no gateway): %s; daemon runs without send_to_user",
-                exc,
-            )
-            return None
         logger.info("heart push enabled for verified direct peer")
-        return IOBridge(client, wire=wire, agent_id=self._config.resident.agent_id)
+        return IOBridge(host.outbound)
 
     def _open_client(self) -> ManagedLlmClient | None:
         # 按 Kindred config 的 provider 选择实现；Provider credential 不从 OpenClaw 读取。

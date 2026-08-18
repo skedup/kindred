@@ -50,6 +50,7 @@ class ToolDef:
     description: str
     parameters: Mapping[str, Any]
     effect: ToolEffect
+    allow_before_action_lock: bool = False
 
     def __post_init__(self) -> None:
         if not is_safe_name(self.name):
@@ -60,6 +61,13 @@ class ToolDef:
             raise TypeError("tool parameters must be a mapping")
         if self.effect not in _EFFECTS:
             raise ValueError(f"invalid tool effect: {self.effect!r}")
+        if type(self.allow_before_action_lock) is not bool:
+            raise TypeError("allow_before_action_lock must be a bool")
+        if self.allow_before_action_lock and self.effect not in {
+            "read_only",
+            "staged_state_event",
+        }:
+            raise ValueError("only preparation tools may run before the action lock")
 
     def function_declaration(self) -> dict[str, Any]:
         return {

@@ -237,9 +237,10 @@ def _observe_recent_contact(
         return unavailable
     context = provider.observe(now=now)
     _LOG.debug(
-        "T1.sense.io recent_contact_available=%s visible=%s",
+        "T1.sense.io recent_contact_available=%s visible=%s partner_visible=%s",
         context.available,
         context.recent_actor is not None,
+        context.recent_partner_message_age_seconds is not None,
     )
     return context
 

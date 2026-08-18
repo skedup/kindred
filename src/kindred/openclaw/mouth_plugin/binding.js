@@ -95,14 +95,18 @@ export function loadMouthContext(ctx, options = {}) {
     const binding = readMouthBinding(options);
     if (!binding || ctx.sessionKey === "global") return null;
     const channelId = ctx.channelId ?? ctx.chatId;
+    const channelMatches =
+      typeof channelId === "string" &&
+      [channelId, `${ctx.messageProvider}:${channelId}`].some(
+        (candidate) => digest(candidate) === binding.peer_scope.channel_id_digest,
+      );
     if (
       ctx.agentId !== binding.agent_id ||
       typeof ctx.workspaceDir !== "string" ||
       digest(ctx.workspaceDir) !== binding.workspace_digest ||
       ctx.sessionKey !== binding.session_key ||
       ctx.messageProvider !== binding.peer_scope.message_provider ||
-      typeof channelId !== "string" ||
-      digest(channelId) !== binding.peer_scope.channel_id_digest
+      !channelMatches
     ) {
       return null;
     }

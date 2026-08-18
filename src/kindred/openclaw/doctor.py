@@ -24,6 +24,7 @@ from kindred.inventory.facts import INVENTORY_CHOICE_CONTEXT_FACT
 from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
 from kindred.llm.client import ToolCapableLlmClient
 from kindred.llm.factory import build_llm_client
+from kindred.mouth_host.model import HermesRuntimeModel, OpenClawRuntimeModel
 from kindred.openclaw.binding import require_openclaw_binding
 from kindred.openclaw.install import (
     _agent_verbose_default,
@@ -31,11 +32,12 @@ from kindred.openclaw.install import (
     _binding_accounts,
     _command,
     _json,
+    _version_warning,
     require_openclaw_runtime,
 )
 from kindred.openclaw.wire import APPROVED_DM_SCOPE, OpenClawWireError, wire_from_session
 from kindred.relationship.preflight import require_user_relationship
-from kindred.resident import read_owned_persona_file, require_committed_resident
+from kindred.resident import PersonaPaths, read_owned_persona_file, require_committed_resident
 from kindred.runtime import platform_service
 from kindred_capability_sdk import ToolCall, ToolDef, ToolResult
 
@@ -101,27 +103,32 @@ def run_doctor(
     home: Path | None = None,
 ) -> DoctorReport:
     context = _Context(config_path or platform_service.service_config_path(), home or Path.home())
+    checks = [_check("config.runtime", lambda: _config(context))]
+    host = context.config.mouth_host if context.config is not None else None
+    local_id = "openclaw.local" if isinstance(host, OpenClawRuntimeModel) else "mouth_host.local"
     specs: tuple[tuple[str, Callable[[], tuple[Status, str] | str]], ...] = (
-        ("config.runtime", lambda: _config(context)),
         ("resident.runtime", lambda: _resident_runtime(context)),
-        ("openclaw.local", lambda: _openclaw_local(context)),
+        (local_id, lambda: _mouth_host_local(context)),
         ("life_assets", _life_assets),
         ("capabilities", lambda: _capabilities(context)),
         ("llm.config", lambda: _llm_config(context)),
         ("services", lambda: _services(context)),
     )
-    checks = [_check(check_id, function) for check_id, function in specs]
+    checks.extend(_check(check_id, function) for check_id, function in specs)
     if online and not any(check["status"] == "failed" for check in checks):
+        online_id = (
+            "online.gateway" if isinstance(host, OpenClawRuntimeModel) else "online.transcript"
+        )
         checks.extend(
             (
-                _check("online.gateway", lambda: _online_gateway(context)),
+                _check(online_id, lambda: _online_host(context)),
                 _check("online.llm", lambda: _online_llm(context)),
             )
         )
     return DoctorReport(online=online, checks=tuple(checks))
 
 
-def require_doctor_ready(config_path: Path, *, online: bool = True) -> DoctorReport:
+def require_doctor_ready(config_path: Path | None, *, online: bool = True) -> DoctorReport:
     report = run_doctor(config_path, online=online)
     if report.exit_code:
         kind = "retryable" if report.exit_code == 2 else "permanent"
@@ -161,11 +168,14 @@ def _config(context: _Context) -> str:
         if config.resident.secrets_file is None:
             raise ValueError
         secrets = read_secrets_file(config.resident.secrets_file)
-        host = config.gateway.host
-        if host != "localhost" and not ipaddress.ip_address(host).is_loopback:
+        if config.mouth_host is None:
             raise ValueError
-        if not config.gateway.token:
-            raise ValueError
+        if isinstance(config.mouth_host, OpenClawRuntimeModel):
+            host = config.gateway.host
+            if host != "localhost" and not ipaddress.ip_address(host).is_loopback:
+                raise ValueError
+            if not config.gateway.token:
+                raise ValueError
     except Exception as exc:
         raise _Fail("配置、secrets 或 loopback Gateway 合同无效") from exc
     context.config, context.secrets = config, secrets
@@ -176,14 +186,18 @@ def _resident_runtime(context: _Context) -> tuple[Status, str]:
     config = _cfg(context)
     try:
         require_committed_resident(config)
-        workspace = config.resident.workspace
-        if workspace is None:
+        model = config.mouth_host
+        if isinstance(model, OpenClawRuntimeModel):
+            persona = PersonaPaths.openclaw(model.workspace)
+        elif isinstance(model, HermesRuntimeModel):
+            persona = PersonaPaths.hermes(model.wire.host_home)
+        else:
             raise ValueError
         if (
-            config.paths.soul_full != workspace / "SOUL.md"
-            or config.paths.identity != workspace / "IDENTITY.md"
-            or config.paths.user != workspace / "USER.md"
-            or config.paths.soul_excerpt != workspace / "SOUL_excerpt.md"
+            config.paths.soul_full != persona.soul_full
+            or config.paths.identity != persona.identity
+            or config.paths.user != persona.user
+            or config.paths.soul_excerpt != persona.soul_excerpt
         ):
             raise ValueError
         read_owned_persona_file(config.paths.soul_full, name="SOUL.md")
@@ -213,31 +227,45 @@ def _resident_runtime(context: _Context) -> tuple[Status, str]:
     return "ok", "Resident、Persona、DB、Catalog、Relationship 与 bundle 边界正常"
 
 
-def _openclaw_local(context: _Context) -> tuple[Status, str]:
+def _mouth_host_local(context: _Context) -> tuple[Status, str]:
     config = _cfg(context)
+    if isinstance(config.mouth_host, HermesRuntimeModel):
+        try:
+            from kindred.hermes.install import hermes_version_warning, require_hermes_runtime
+
+            warning = hermes_version_warning(require_hermes_runtime(config))
+        except Exception as exc:
+            raise _Fail("Hermes Plugin/binding 不一致；请重新运行 kindred install") from exc
+        if warning:
+            return "warning", warning
+        return "ok", "Hermes runtime、wire、binding 与 retained Mouth Plugin 一致"
+    if not isinstance(config.mouth_host, OpenClawRuntimeModel):
+        raise _Fail("Mouth host 配置缺失")
+    model = config.mouth_host
     try:
-        require_openclaw_runtime(config, home=context.home)
+        identity = require_openclaw_runtime(config, home=context.home)
         agents = _agents()
     except Exception as exc:
-        raise _Fail("OpenClaw Plugin/binding 不一致；请重新运行 kindred openclaw install") from exc
+        raise _Fail("OpenClaw Plugin/binding 不一致；请重新运行 kindred install") from exc
     if not any(
-        agent.agent_id == config.resident.agent_id and agent.workspace == config.resident.workspace
-        for agent in agents
+        agent.agent_id == model.agent_id and agent.workspace == model.workspace for agent in agents
     ):
         raise _Fail("OpenClaw agent/workspace 与 Resident 不一致")
     scope = _json(("openclaw", "config", "get", "session.dmScope", "--json"))
     if scope != APPROVED_DM_SCOPE:
         raise _Fail("OpenClaw dmScope 必须为 per-channel-peer")
-    wire = config.openclaw
-    if wire is None:
-        raise _Fail("OpenClaw transcript/peer/route wire 缺失")
+    wire = model.wire
     peer = wire.approved_peer
-    if (peer.provider, peer.account_id) not in _binding_accounts(config.resident.agent_id):
+    if (peer.provider, peer.account_id) not in _binding_accounts(model.agent_id):
         raise _Fail("OpenClaw binding account 与 approved peer 不一致")
     _gateway(config)
     _check_plugin()
-    if _agent_verbose_default(config.resident.agent_id) != "off":
-        return "warning", "Mouth agent 未显式关闭工具调用过程展示；请重跑 install"
+    warning = _version_warning(identity)
+    if _agent_verbose_default(model.agent_id) != "off":
+        verbose_warning = "Mouth agent 未显式关闭工具调用过程展示；请重跑 install"
+        warning = f"{warning}；{verbose_warning}" if warning else verbose_warning
+    if warning:
+        return "warning", warning
     return "ok", "CLI、wire、binding、dmScope 与 packaged Mouth Plugin 一致"
 
 
@@ -306,6 +334,7 @@ def _llm_config(context: _Context) -> str:
         "anthropic": ("ANTHROPIC_API_KEY",),
         "deepseek": ("DEEPSEEK_API_KEY",),
         "openai": ("OPENAI_API_KEY",),
+        "xai": ("XAI_API_KEY",),
     }.get(config.llm.provider, ())
     if required and not any(context.secrets.get(name) or os.environ.get(name) for name in required):
         raise _Fail("Heart LLM credential 缺失")
@@ -333,7 +362,7 @@ def _services(context: _Context) -> tuple[Status, str]:
         web_extra = False
     if web[1] and not web_extra:
         raise _Fail("Web service 已安装但 kindred[web] 缺失")
-    if _port_open(8787) and not web[2]:
+    if _port_open(_cfg(context).web.port) and not web[2]:
         raise _Fail("Web 端口已被非托管进程占用")
     facts = ", ".join(
         f"{name}={'active' if active else 'inactive'}" for name, _, _, active in status
@@ -345,12 +374,23 @@ def _services(context: _Context) -> tuple[Status, str]:
     )
 
 
-def _online_gateway(context: _Context) -> tuple[Status, str]:
+def _online_host(context: _Context) -> tuple[Status, str]:
     config = _cfg(context)
-    wire = config.openclaw
-    assert wire is not None
+    if isinstance(config.mouth_host, HermesRuntimeModel):
+        from kindred.mouth_host.composition import prepare_host
+
+        check = prepare_host(config.mouth_host).checks(online=True)[-1]
+        if check["status"] == "failed":
+            raise _Fail(
+                "Hermes transcript identity online check failed",
+                retryable=bool(check["retryable"]),
+            )
+        return "ok", "Hermes transcript identity is current and readable"
+    if not isinstance(config.mouth_host, OpenClawRuntimeModel):
+        raise _Fail("Mouth host 配置缺失")
+    model, wire = config.mouth_host, config.mouth_host.wire
     gateway = _gateway(config)
-    sessions = gateway.list_sessions(agent_id=config.resident.agent_id)
+    sessions = gateway.list_sessions(agent_id=model.agent_id)
     if "error" in sessions:
         raise _gateway_fail(sessions["error"])
     rows = sessions.get("sessions")

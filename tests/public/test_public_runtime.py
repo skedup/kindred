@@ -3,18 +3,28 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import os
 import tarfile
 import zipfile
+from copy import deepcopy
 from email.parser import Parser
 from importlib import metadata
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from kindred.activity import list_registered_actions, list_registered_activities
-from kindred.config import DEFAULT_CONFIG
+from kindred.config import DEFAULT_CONFIG, DEFAULT_WEB_HOST, DEFAULT_WEB_PORT
+from kindred.config.schema import KindredConfig
+from kindred.db import KindredDB
+from kindred.db.places import derive_place_visit
+from kindred.graph.dream.summarize import step1_summarize
+from kindred.graph.tick.sense_derive import t1_sense_derive
 from kindred.llm import build_llm_client
 from kindred.llm.anthropic_client import AnthropicLlmClient
 from kindred.llm.claude_code_client import ClaudeCodeLlmClient
@@ -22,6 +32,16 @@ from kindred.llm.deepseek_client import DeepSeekLlmClient
 from kindred.llm.gemini_client import GeminiLlmClient
 from kindred.llm.openai_client import OpenAILlmClient
 from kindred.llm.real_client import parse_llm_json, text_fingerprint
+from kindred.llm.xai_client import XaiLlmClient
+from kindred.location.models import LocationOrigin, LocationQuery
+from kindred.providers.environment import VirtualEnvironmentProvider
+from kindred.providers.location import VirtualLocationProvider
+from kindred.runtime.pidfile import acquire, read_pid
+from kindred.runtime.scheduler import Debouncer
+from kindred.runtime.watcher import MessageCursor, MessageWatcher
+from kindred.state._seed import make_doc_example_state
+from kindred.web.app import create_app
+from kindred.web.service import VisualStateProjector, derive_visual_source_id
 
 _PUBLIC_DISTRIBUTIONS = {
     "kindred",
@@ -143,6 +163,7 @@ def test_built_root_distribution_contains_precompiled_web_without_source_maps() 
         ("google", GeminiLlmClient),
         ("deepseek", DeepSeekLlmClient),
         ("openai", OpenAILlmClient),
+        ("xai", XaiLlmClient),
     ],
 )
 def test_all_public_llm_providers_route_to_their_client(
@@ -167,3 +188,216 @@ def test_public_llm_parser_and_fingerprint_contract() -> None:
     fingerprint = text_fingerprint(private_text)
     assert fingerprint.startswith(f"bytes={len(private_text.encode())} sha256=")
     assert private_text not in fingerprint
+
+
+def test_public_openai_response_json_contract() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/responses"
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": '{"ok":true}'}],
+                    }
+                ],
+            },
+        )
+
+    client = OpenAILlmClient(
+        api_key="EXAMPLE_API_KEY",
+        model="openai-contract-test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        assert client.complete("synthetic input", role="sense.llm") == {"ok": True}
+    finally:
+        client.close()
+
+
+def test_public_runtime_configuration_keeps_typed_world_defaults() -> None:
+    assert isinstance(DEFAULT_CONFIG, KindredConfig)
+    assert DEFAULT_CONFIG.world.weather_provider == "virtual"
+    assert DEFAULT_CONFIG.world.weather_ttl_minutes > 0
+
+
+def test_public_visual_state_foundation_is_stable_and_action_only() -> None:
+    assert (DEFAULT_WEB_HOST, DEFAULT_WEB_PORT) == ("127.0.0.1", 8787)
+    install_id = "synthetic-public-install"
+    db = MagicMock()
+    db.get_state_latest.return_value = {
+        "id": 7,
+        "ts": "2026-08-17T12:00:00+08:00",
+        "activity": {
+            "started_at": "2026-08-17T11:55:00+08:00",
+            "step": "walk",
+        },
+    }
+    db.get_motion_instance_start_id.return_value = 5
+
+    snapshot = VisualStateProjector(
+        install_id,
+        registered_actions={"walk"},
+    ).project(db)
+
+    assert snapshot.model_dump(mode="json") == {
+        "schema_version": 1,
+        "source_id": derive_visual_source_id(install_id),
+        "status": "ready",
+        "revision": 7,
+        "committed_at": "2026-08-17T12:00:00+08:00",
+        "motion_instance_id": "tick:5",
+        "action": {"name": "walk"},
+    }
+    assert install_id not in snapshot.source_id
+
+
+def test_public_visual_state_http_contract_fails_closed_on_incomplete_schema(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "visual-state.db"
+    config = dataclasses.replace(
+        DEFAULT_CONFIG,
+        resident=dataclasses.replace(
+            DEFAULT_CONFIG.resident,
+            install_id="synthetic-public-install",
+        ),
+    )
+    with KindredDB.open(db_path) as db:
+        client = TestClient(create_app(config=config, db_path=db_path))
+        response = client.get("/api/visual-state")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["status"] == "empty"
+
+        db._conn.execute("DROP VIEW state_latest")  # noqa: SLF001
+        db._conn.execute(  # noqa: SLF001
+            "CREATE VIEW state_latest AS SELECT id, ts, activity FROM tick LIMIT 1"
+        )
+        db._conn.commit()  # noqa: SLF001
+
+    unavailable = client.get("/api/visual-state")
+    assert unavailable.status_code == 503
+    assert unavailable.headers["cache-control"] == "no-store"
+    assert unavailable.json() == {"detail": "Visual state is unavailable"}
+
+
+def test_public_place_visit_contract_derives_committed_arrival() -> None:
+    visit = derive_place_visit(
+        tick_id=7,
+        act_result={
+            "committed": True,
+            "location_arrival": {
+                "place_key": "virtual:library",
+                "name": "Synthetic Library",
+                "source": "virtual",
+            },
+        },
+        location={"arrived_at": "2026-08-15T12:00:00+08:00"},
+        activity={"name": "visit_cultural_place"},
+    )
+
+    assert visit is not None
+    assert (visit.place_key, visit.tick_id, visit.activity_name) == (
+        "virtual:library",
+        7,
+        "visit_cultural_place",
+    )
+
+
+def test_public_virtual_location_provider_is_deterministic_and_offline() -> None:
+    query = LocationQuery(
+        origin=LocationOrigin(name="Home", city="Synthetic City"),
+        query="find a quiet cafe",
+        categories=("cafe",),
+        limit=2,
+    )
+    provider = VirtualLocationProvider()
+
+    first = provider.find_nearby(query)
+    assert first == provider.find_nearby(query)
+    assert len(first) == 2
+    assert all(item.source == "virtual" and item.type == "cafe" for item in first)
+
+
+def test_public_dream_summary_has_honest_no_database_fallback() -> None:
+    result = step1_summarize({"dream_date": "2026-08-14"})
+
+    assert "2026-08-14" in result["messages_summary"]
+    assert "没有可回顾" in result["messages_summary"]
+
+
+def test_public_sense_derive_advances_time_without_external_io() -> None:
+    previous = make_doc_example_state(ts="2026-08-15T11:55:00+08:00").model_dump()
+    untouched = deepcopy(previous)
+    result = t1_sense_derive(
+        {
+            "trigger_source": "heartbeat",
+            "triggered_at": "2026-08-15T12:00:00+08:00",
+            "prev_state": previous,
+            "next_state": deepcopy(previous),
+        }
+    )
+
+    assert result["next_state"]["time"]["iso"] == "2026-08-15T12:00:00+08:00"
+    assert "interior" in result["next_state"]
+    assert previous == untouched
+
+
+def test_public_virtual_weather_is_deterministic_and_offline() -> None:
+    now = dt.datetime(2026, 8, 15, 12, tzinfo=dt.timezone.utc)
+    provider = VirtualEnvironmentProvider(now_fn=lambda: now)
+
+    first = provider.get_weather("Synthetic City")
+    second = provider.get_weather("Synthetic City")
+
+    assert first == second
+    assert 0 <= first.humidity <= 100
+    assert 0 <= first.uv_index <= 12
+    assert not hasattr(first, "ambience")
+
+
+def test_public_pid_lease_records_owner_and_releases_lock(tmp_path: Path) -> None:
+    pid_file = tmp_path / "kindred.pid"
+    lease = acquire(pid_file)
+    try:
+        assert read_pid(pid_file) == os.getpid()
+    finally:
+        lease.release()
+
+    assert pid_file.is_file()
+    second_lease = acquire(pid_file)
+    second_lease.release()
+
+
+def test_public_watcher_fires_without_mutating_cursor() -> None:
+    class Source:
+        saved: list[MessageCursor] = []
+
+        def load_cursor(self, *, session_key: str) -> MessageCursor:
+            assert session_key == "synthetic-session"
+            return MessageCursor(1000, -1, 1)
+
+        def exists_partner_after(self, *, session_key: str, cursor: MessageCursor | None) -> bool:
+            assert session_key == "synthetic-session"
+            assert cursor == MessageCursor(1000, -1, 1)
+            return True
+
+        def save_cursor(self, *, session_key: str, cursor: MessageCursor) -> None:
+            del session_key
+            self.saved.append(cursor)
+
+    source = Source()
+    watcher = MessageWatcher(source, Debouncer(), session_key="synthetic-session")  # type: ignore[arg-type]
+
+    event = watcher.poll_once(now=1.0, triggered_at="2026-08-15T12:00:00+08:00")
+
+    assert event is not None
+    assert event.to_invoke_input() == {
+        "trigger_source": "watcher",
+        "triggered_at": "2026-08-15T12:00:00+08:00",
+    }
+    assert source.saved == []

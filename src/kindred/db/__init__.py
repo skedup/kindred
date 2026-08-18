@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from kindred.db._types import TickWriteParams
 from kindred.db.connection import (
+    CURRENT_SCHEMA_VERSION,
     connect,
     connect_readonly,
     count,
@@ -49,7 +50,6 @@ from kindred.db.messages import (
     ROLE_MY_VOICE,
     ROLE_PARTNER,
     MainSessionMessage,
-    build_from_gateway,
     count_messages,
     extract_text_summary,
     get_after_cursor,
@@ -57,6 +57,7 @@ from kindred.db.messages import (
     get_by_msg_id,
     get_latest,
     get_latest_visible_contact_expression,
+    get_latest_visible_partner_expression,
     get_max_cursor,
     get_max_seq,
     get_max_ts_ms,
@@ -92,6 +93,7 @@ from kindred.db.ticks import (
     get_episodes_page,
     get_highlight_episodes,
     get_interior_history,
+    get_motion_instance_start_id,
     get_recent_activity_rows,
     get_recent_ticks,
     get_state_latest,
@@ -106,6 +108,7 @@ __all__ = [
     # connection
     "connect",
     "connect_readonly",
+    "CURRENT_SCHEMA_VERSION",
     "count",
     "count_episode_recalls",
     # ticks
@@ -120,12 +123,12 @@ __all__ = [
     "ROLE_MY_VOICE",
     "ROLE_PARTNER",
     "count_messages",
-    "build_from_gateway",
     "extract_text_summary",
     "get_between_ms",
     "get_by_msg_id",
     "get_latest",
     "get_latest_visible_contact_expression",
+    "get_latest_visible_partner_expression",
     "get_after_cursor",
     "get_max_cursor",
     "get_max_seq",
@@ -142,6 +145,7 @@ __all__ = [
     "get_episodes_page",
     "get_highlight_episodes",
     "get_interior_history",
+    "get_motion_instance_start_id",
     "get_recent_activity_rows",
     "get_recent_ticks",
     "get_ticks_for_bundle",

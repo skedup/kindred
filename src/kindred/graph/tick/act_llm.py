@@ -421,7 +421,6 @@ def _t2_act_llm_impl(
         effect_session=effect_session,
         outcome_session=outcome_session,
     )
-    decision_reason_raw = act_decision.get("reason")
     sense_note_raw = state.get("note")
     expression_section = ""
     if any(tool.effect == "artifact_write" for tool in authorized_tools):
@@ -436,7 +435,6 @@ def _t2_act_llm_impl(
             triggered_at=triggered_at,
             soul_excerpt=soul_excerpt,
             sense_note=sense_note_raw,
-            decision_reason=decision_reason_raw,
             weather_ttl_minutes=host_runtime.config.world.weather_ttl_minutes,
             weather_location=host_runtime.config.world.weather_location,
         )
@@ -502,11 +500,6 @@ def _t2_act_llm_impl(
         possession_facts_section=render_current_possession_facts(next_state),
         expression_context_section=expression_section,
         relationship_summary=_read_relationship_summary(relationship_reader),
-        decision_reason=(
-            decision_reason_raw.strip()
-            if not expression_section and isinstance(decision_reason_raw, str)
-            else ""
-        ),
         sense_note=(
             sense_note_raw.strip()
             if not expression_section and isinstance(sense_note_raw, str)
@@ -881,9 +874,16 @@ def _handle_act_tool(
                 message="tool is not authorized for the current activity",
             )
         if context.outcome_session is not None:
+            tool_def = next(
+                (tool for tool in context.authorization.authorized_tools if tool.name == call.name),
+                None,
+            )
             rejected = context.outcome_session.guard_tool(
                 call,
                 owner="location_kernel",
+                allow_before_action_lock=bool(
+                    tool_def is not None and tool_def.allow_before_action_lock
+                ),
                 binding_id=context.location_session.binding_id_for_call(call),
             )
             if rejected is not None:
@@ -894,7 +894,7 @@ def _handle_act_tool(
         rejected = context.outcome_session.guard_tool(
             call,
             owner=registered.capability_name,
-            effect=registered.tool_def.effect,
+            allow_before_action_lock=registered.tool_def.allow_before_action_lock,
         )
         if rejected is not None:
             return rejected

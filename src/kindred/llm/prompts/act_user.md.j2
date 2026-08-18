@@ -16,7 +16,7 @@
   - expression_context_section: str artifact writer 可用的当前生活材料；无则为空
   - outbound_fact_section: str 外部发送事实段（send_to_user 是否真的成功）；无则为空
   - artifact_section: str 当前 Activity run 中可消费的 committed artifact；无则为空
-  - decision_handoff_section: str Sense 已消化的本拍 note + 决定缘由；无则为空
+  - decision_handoff_section: str Sense 已形成的本拍 note；无则为空
   - en_route_destinations: list[str]  进行中目的地计划的地点名（L5 en route 引导）；无则空列表
 #}
 [act.llm tick @ {{ triggered_at }} kind={{ kind }} target={{ target }}]

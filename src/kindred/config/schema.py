@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kindred.openclaw import OpenClawWire
+from kindred.mouth_host.model import HostRuntimeModel
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class KindredLlmConfig:
     """LLM runtime settings.
 
     ``provider`` 选择 ``claude_code``、``anthropic``、``google``、``deepseek`` 或
-    ``openai``。HTTP Provider 的 credential 只从 Kindred secrets/env 注入；
+    ``openai`` 或 ``xai``。HTTP Provider 的 credential 只从 Kindred secrets/env 注入；
     ``claude_code`` 使用本机 Claude CLI 登录态。
 
     ``claude_code_timeout_s``：``provider=claude_code`` 时单次 ``claude -p`` 子进程超时（秒）。
@@ -74,8 +74,8 @@ class KindredDaemonConfig:
     """Daemon runtime settings.
 
     ``session_key`` identifies the canonical transcript partition used by the
-    graph. When OpenClaw wire is configured, the loader requires it to equal
-    ``openclaw.transcript_session``.
+    graph. When a Mouth host is configured, the loader requires it to equal
+    that host's canonical transcript identity.
     """
 
     session_key: str
@@ -112,6 +112,8 @@ class KindredWebConfig:
     先用 config 当代理。CSS hover 不是隐私边界，这个才是。
     """
 
+    host: str
+    port: int
     reveal_intimate: bool
 
 
@@ -121,7 +123,7 @@ class KindredWorldConfig:
 
     「能呼吸的世界」已落两块入口：EnvironmentProvider（天气）与 LocationProvider
     （地点 affordance）。详见
-    ``docs/discussions/2026-06-29-breathable-world-event-provider.md`` §7 +
+    ``docs/archive/discussions/2026-06/2026-06-29-breathable-world-event-provider.md`` §7 +
     ``src/kindred/providers``。
 
     - ``location_provider``：``none``（默认关闭）| ``virtual``（纯虚拟、无网络、显式
@@ -168,8 +170,6 @@ class KindredResidentConfig:
 
     install_id: str
     resident_id: str
-    agent_id: str
-    workspace: Path | None
     marker_path: Path | None
     secrets_file: Path | None
 
@@ -184,7 +184,7 @@ class KindredConfig:
     debug: KindredDebugConfig
     daemon: KindredDaemonConfig
     gateway: KindredGatewayConfig
-    openclaw: OpenClawWire | None
+    mouth_host: HostRuntimeModel | None
     web: KindredWebConfig
     world: KindredWorldConfig
     resident: KindredResidentConfig

@@ -139,7 +139,6 @@ def test_expression_projection_is_bounded_fresh_and_immutable() -> None:
         triggered_at=state["time"]["iso"],
         soul_excerpt="声线" * 300,
         sense_note="心声" * 100,
-        decision_reason="缘由" * 100,
         weather_ttl_minutes=60,
         weather_location="synthetic-city",
     )
@@ -150,15 +149,14 @@ def test_expression_projection_is_bounded_fresh_and_immutable() -> None:
         triggered_at=state["time"]["iso"],
         soul_excerpt="声线" * 300,
         sense_note="心声" * 100,
-        decision_reason="缘由" * 100,
         weather_ttl_minutes=60,
         weather_location="synthetic-city",
     )
     assert len(context.soul_excerpt) == 500
     assert len(context.sense_note) <= 130
-    assert len(context.decision_reason) <= 130
     assert len(context.ambience) <= 160
     assert any("雨后晴" in line for line in context.scene_lines)
+    assert "体感" not in "\n".join(context.scene_lines)
     assert context.activity_line.startswith("- 当前经历：")
 
 
@@ -169,7 +167,6 @@ def test_expression_template_has_a_fixed_small_envelope() -> None:
         possession_lines=("x" * 240,),
         activity_line="x" * 160,
         sense_note="x" * 130,
-        decision_reason="x" * 130,
         ambience="x" * 160,
     )
 
@@ -207,7 +204,7 @@ def test_act_writer_consumes_one_bounded_expression_context(tmp_path: Path) -> N
 
     assert client.prompt.count("## 此刻的生活材料") == 1
     assert client.prompt.count(tick["note"]) == 1
-    assert client.prompt.count(tick["act_decision"]["reason"]) == 1
+    assert tick["act_decision"]["reason"] not in client.prompt
     assert client.prompt.count(excerpt.read_text(encoding="utf-8")) == 1
     assert "## 这一拍的行动依据" not in client.prompt
     assert [tool.name for tool in client.tools][:2] == ["write_compose", "send_to_user"]

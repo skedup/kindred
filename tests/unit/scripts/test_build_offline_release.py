@@ -55,7 +55,10 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
     root = Path(__file__).resolve().parents[3]
     inputs = json.loads((root / "distribution/release-inputs.json").read_text())
 
-    assert inputs["release_version"] == "0.2.1"
+    assert inputs["release_version"] == "0.3.0"
+    assert set(inputs["mouth_hosts"]) == {"openclaw", "hermes"}
+    assert len(inputs["mouth_hosts"]["openclaw"]["profiles"]) == 2
+    assert inputs["mouth_hosts"]["hermes"]["maturity"] == "experimental"
     assert set(inputs["platforms"]) == {"macos-arm64", "ubuntu24-x86_64"}
     assert inputs["build_tools"] == {
         "node": "22.18.0",
@@ -84,6 +87,7 @@ def test_release_version_must_match_the_root_wheel(tmp_path: Path) -> None:
             {
                 "schema_version": 1,
                 "release_version": "0.2.0",
+                "mouth_hosts": {},
                 "first_party": [
                     ["kindred", "0.1.0", ".", "kindred-0.1.0-py3-none-any.whl", "0" * 64]
                 ],
@@ -93,6 +97,27 @@ def test_release_version_must_match_the_root_wheel(tmp_path: Path) -> None:
 
     with pytest.raises(release.ReleaseBuildError, match="root wheel"):
         release._load_inputs(tmp_path)
+
+
+def test_mouth_host_matrix_rejects_missing_or_mixed_hosts() -> None:
+    release = _load_module()
+    platforms = {"macos-arm64", "ubuntu24-x86_64"}
+
+    with pytest.raises(release.ReleaseBuildError, match="Mouth Host"):
+        release._validate_mouth_hosts({"openclaw": {}}, platforms)
+    with pytest.raises(release.ReleaseBuildError, match="Mouth Host"):
+        release._validate_mouth_hosts(
+            {
+                "openclaw": {
+                    "maturity": "supported",
+                    "platforms": sorted(platforms),
+                    "profiles": [],
+                    "hermes": {},
+                },
+                "hermes": {},
+            },
+            platforms,
+        )
 
 
 def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
@@ -113,6 +138,10 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     for name in ("binding.js", "index.js", "openclaw.plugin.json", "outbound.js"):
         (plugin / name).write_text("fixture\n")
     (plugin / "package.json").write_text(json.dumps({"version": "0.3.0"}))
+    hermes_plugin = root / "src/kindred/hermes/mouth_plugin"
+    hermes_plugin.mkdir(parents=True)
+    (hermes_plugin / "__init__.py").write_text("# fixture\n")
+    (hermes_plugin / "plugin.yaml").write_text("name: kindred-mouth\nversion: 0.1.0\n")
     install_skill = root / "src/kindred/openclaw/install_skill/SKILL.md"
     install_skill.parent.mkdir()
     install_skill.write_text("---\nname: install-kindred\ndescription: fixture\n---\n")
@@ -132,7 +161,21 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     inputs = {
         "schema_version": 1,
         "release_version": "0.1.0",
-        "openclaw": {"version": "2026.6.10", "build": "aa69b12", "protocol": 4},
+        "mouth_hosts": {
+            "openclaw": {
+                "maturity": "supported",
+                "platforms": ["macos-arm64", "ubuntu24-x86_64"],
+                "profiles": [
+                    {"version": "a", "build": "b", "protocol": 4, "verification": "verified"},
+                    {"version": "c", "build": "d", "protocol": 4, "verification": "verified"},
+                ],
+            },
+            "hermes": {
+                "maturity": "experimental",
+                "platforms": ["macos-arm64", "ubuntu24-x86_64"],
+                "profiles": [{"release": "v1", "package": "1.0.0", "verification": "verified"}],
+            },
+        },
         "build_tools": {},
         "first_party": [
             [
@@ -184,7 +227,9 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
         "sha256": hashlib.sha256(install_skill.read_bytes()).hexdigest(),
     }
     assert manifest["draw"] == {"included": True, "enabled_by_default": False}
-    assert manifest["mouth_plugin"]["version"] == "0.3.0"
+    assert manifest["mouth_hosts"] == inputs["mouth_hosts"]
+    assert manifest["mouth_plugins"]["openclaw"]["version"] == "0.3.0"
+    assert manifest["mouth_plugins"]["hermes"]["version"] == "0.1.0"
     for platform in manifest["platforms"]:
         bundle = output / manifest["platforms"][platform]["bundle"]["filename"]
         with tarfile.open(bundle) as archive:

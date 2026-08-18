@@ -23,13 +23,15 @@ paths:
 llm:
   model: gemini-2.5-flash
   # LLM 后端。凭据只从 Kindred secrets/env 注入，不读取 OpenClaw 配置。
-  # provider: claude_code | anthropic | google | deepseek | openai
+  # provider: claude_code | anthropic | google | deepseek | openai | xai
   # provider=claude_code / anthropic 时把 model 配成 Claude 模型（如 claude-haiku-4-5 / claude-opus-4-8）；
   # claude_code 机器需 claude auth login，anthropic 经 env ANTHROPIC_API_KEY 注入（可选 ANTHROPIC_BASE_URL）。
   # provider=google 时把 model 配成 gemini 模型（如 gemini-3.5-flash），经 env GEMINI_API_KEY 注入（可选 GEMINI_BASE_URL）。
   # provider=deepseek 时推荐 model=deepseek-v4-pro；client 固定 thinking=enabled / reasoning_effort=high，
   # 经 env DEEPSEEK_API_KEY 注入（可选 DEEPSEEK_BASE_URL）。
   # provider=openai 时把 model 配成 OpenAI 模型，经 env OPENAI_API_KEY 注入（可选 OPENAI_BASE_URL，默认含 /v1）。
+  # provider=xai 时把 model 配成 Grok 模型（如 grok-4.6），经 env XAI_API_KEY 注入
+  # （可选 XAI_BASE_URL，默认含 /v1）。
   provider: google
   # provider=claude_code 单次 claude -p 子进程超时（秒）。心每 tick 起一个 claude 子进程
   # （冷启+模型延迟本就慢），心嘴并发各起子进程共用订阅时单次可超 120s；放宽到 300s。
@@ -66,9 +68,12 @@ gateway:
 
 # OPEN3-B installer 会把已验证的 transcript/peer/route 写入私有 XDG config。
 # 未接线时保持空表，Gateway history 与 outbound 都 fail-closed。
-openclaw: {}
+mouth_host: {}
 
 web:
+  # 默认仅本机可达。显式绑定非 loopback 会暴露完整只读 Web/API；服务启动时会提示。
+  host: "127.0.0.1"
+  port: 8787
   # 私密层（bra/panties/socks）。该值 = 本实例「亲密度够」标志（docs/02 §401
   # 关系深度控制）。显明文三态：显 = ?reveal=1（右上角揭示开关）OR 该值为 true。
   # 默认 false = 陌生人实例；亲密关系的实例设 true。CSS hover 不是隐私边界。
@@ -76,7 +81,7 @@ web:
 
 world:
   # 世界系统（Provider 层）——「能呼吸的世界」。
-  # 见 docs/discussions/2026-06-29-breathable-world-event-provider.md §7 + src/kindred/providers。
+  # 见 docs/archive/discussions/2026-06/2026-06-29-breathable-world-event-provider.md §7 + src/kindred/providers。
   #   location_provider: none（默认关闭） | virtual（纯虚拟、无网络、显式 opt-in）
   #                      | baidu（百度地图 Place API，GCJ-02；凭据走 env BAIDU_MAP_AK
   #                      [+ SN 校验型应用的 BAIDU_MAP_SK]；查询失败不降级 virtual，
@@ -99,8 +104,6 @@ world:
 resident:
   install_id: ""
   resident_id: ""
-  agent_id: ""
-  workspace: ""
   marker_path: ""
   secrets_file: ""
 

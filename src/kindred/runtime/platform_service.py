@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import os
 import plistlib
+import shlex
 import subprocess
 import sys
 from importlib.resources import files
@@ -34,7 +35,7 @@ def install_services(config_path: Path, *, include_web: bool) -> tuple[str, ...]
 
 
 def control_services(config_path: Path | None = None, *, action: str) -> tuple[str, ...]:
-    platform, paths = _owned(config_path)
+    platform, paths = _owned(config_path) if action == "start" else _recoverable_owned()
     names = tuple(name for name in _NAMES if paths[name].is_file())
     if action == "start" and (not names or names[0] != "heart"):
         raise PlatformServiceError("Kindred Heart service is not installed")
@@ -69,7 +70,7 @@ def control_services(config_path: Path | None = None, *, action: str) -> tuple[s
 
 
 def uninstall_services(config_path: Path | None = None) -> tuple[str, ...]:
-    platform, paths = _owned(config_path)
+    platform, paths = _recoverable_owned()
     names = tuple(name for name in reversed(_NAMES) if paths[name].is_file())
     for name in names:
         paths[name].unlink()
@@ -79,7 +80,7 @@ def uninstall_services(config_path: Path | None = None) -> tuple[str, ...]:
 
 
 def service_status(config_path: Path | None = None) -> tuple[tuple[str, bool, bool, bool], ...]:
-    platform, paths = _owned(config_path)
+    platform, paths = _recoverable_owned()
     result = []
     for name in _NAMES:
         installed = paths[name].is_file()
@@ -98,7 +99,7 @@ def service_status(config_path: Path | None = None) -> tuple[tuple[str, bool, bo
 
 
 def show_logs(service: str, *, follow: bool, lines: int, config_path: Path | None = None) -> None:
-    platform, paths = _owned(config_path)
+    platform, paths = _recoverable_owned()
     if service not in _NAMES or not paths.get(service, Path()).is_file():
         raise PlatformServiceError("Kindred service is not installed")
     if platform == "linux":
@@ -120,17 +121,7 @@ def _definitions(config_path: Path | None) -> tuple[str, dict[str, Path], dict[s
             raise FileNotFoundError(python)
     except Exception as exc:
         raise PlatformServiceError("service executable or config is missing or invalid") from exc
-    if sys.platform == "darwin":
-        platform, root = "darwin", Path.home() / "Library/LaunchAgents"
-        paths = {name: root / f"{_LABEL[name]}.plist" for name in _NAMES}
-    elif sys.platform.startswith("linux"):
-        platform = "linux"
-        root = Path(os.environ.get(ENV_XDG_CONFIG_HOME, Path.home() / ".config"))
-        paths = {name: root / "systemd/user" / _UNIT[name] for name in _NAMES}
-    else:
-        raise PlatformServiceError(
-            "unsupported platform; use foreground `kindred run` and optional `kindred serve`"
-        )
+    platform, paths = _service_paths()
     resource = files("kindred.service_templates")
     template = resource.joinpath("launchd.plist" if platform == "darwin" else "systemd.service")
     rendered = {}
@@ -158,6 +149,21 @@ def _definitions(config_path: Path | None) -> tuple[str, dict[str, Path], dict[s
     return platform, paths, rendered
 
 
+def _service_paths() -> tuple[str, dict[str, Path]]:
+    if sys.platform == "darwin":
+        platform, root = "darwin", Path.home() / "Library/LaunchAgents"
+        paths = {name: root / f"{_LABEL[name]}.plist" for name in _NAMES}
+    elif sys.platform.startswith("linux"):
+        platform = "linux"
+        root = Path(os.environ.get(ENV_XDG_CONFIG_HOME, Path.home() / ".config"))
+        paths = {name: root / "systemd/user" / _UNIT[name] for name in _NAMES}
+    else:
+        raise PlatformServiceError(
+            "unsupported platform; use foreground `kindred run` and optional `kindred serve`"
+        )
+    return platform, paths
+
+
 def _owned(config_path: Path | None) -> tuple[str, dict[str, Path]]:
     platform, paths, rendered = _definitions(config_path)
     for name, path in paths.items():
@@ -166,6 +172,72 @@ def _owned(config_path: Path | None) -> tuple[str, dict[str, Path]]:
         ):
             raise PlatformServiceError(f"Kindred service file drifted: {path.name}")
     return platform, paths
+
+
+def _recoverable_owned() -> tuple[str, dict[str, Path]]:
+    platform, paths = _service_paths()
+    for name, path in paths.items():
+        if path.exists() and not _is_kindred_definition(platform, name, path):
+            raise PlatformServiceError(f"Kindred service file drifted: {path.name}")
+    return platform, paths
+
+
+def _is_kindred_definition(platform: str, name: str, path: Path) -> bool:
+    if path.is_symlink() or not path.is_file():
+        return False
+    command = "run" if name == "heart" else "serve"
+    try:
+        if platform == "linux":
+            actual_text = path.read_text(encoding="utf-8")
+            commands = [
+                line.removeprefix("ExecStart=")
+                for line in actual_text.splitlines()
+                if line.startswith("ExecStart=")
+            ]
+            if len(commands) != 1:
+                return False
+            expected = (
+                files("kindred.service_templates")
+                .joinpath("systemd.service")
+                .read_text()
+                .replace("__DESCRIPTION__", f"Kindred {name.title()}")
+                .replace("__EXEC_START__", commands[0])
+            )
+            return actual_text == expected and _is_kindred_argv(shlex.split(commands[0]), command)
+        actual_bytes = path.read_bytes()
+        payload = plistlib.loads(actual_bytes)
+        argv = payload.get("ProgramArguments")
+        stdout, stderr = payload.get("StandardOutPath"), payload.get("StandardErrorPath")
+        expected = plistlib.loads(
+            files("kindred.service_templates").joinpath("launchd.plist").read_bytes()
+        )
+        expected.update(
+            Label=_LABEL[name],
+            ProgramArguments=argv,
+            StandardOutPath=stdout,
+            StandardErrorPath=stderr,
+        )
+        return (
+            actual_bytes == plistlib.dumps(expected, sort_keys=True)
+            and _is_kindred_argv(argv, command)
+            and isinstance(stdout, str)
+            and isinstance(stderr, str)
+            and Path(stdout).is_absolute()
+            and Path(stderr).is_absolute()
+        )
+    except (KeyError, OSError, TypeError, ValueError, plistlib.InvalidFileException):
+        return False
+
+
+def _is_kindred_argv(argv: object, command: str) -> bool:
+    return (
+        isinstance(argv, list)
+        and len(argv) == 6
+        and all(isinstance(value, str) for value in argv)
+        and Path(argv[0]).is_absolute()
+        and argv[1:5] == ["-m", "kindred.cli", command, "--config"]
+        and Path(argv[5]).is_absolute()
+    )
 
 
 def _quote(value: str) -> str:

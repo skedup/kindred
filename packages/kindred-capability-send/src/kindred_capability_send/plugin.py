@@ -23,7 +23,11 @@ _DISPATCH_STATUS_KEY = "send_dispatch_status"
 
 SEND_TO_USER = ToolDef(
     name="send_to_user",
-    description="发送当前活动已提交的 outbound artifact。",
+    description=(
+        "立即且不可撤回地发送 Host 在当前 Activity run 中明确披露、尚未送达的 committed "
+        "outbound Artifact。只传 artifact_ref，不传正文；不得猜测 latest、回退 note，或消费"
+        "同拍尚未提交的 staged Artifact。没有可用 ref、仍在犹豫或工具失败时，不得伪造已发送。"
+    ),
     effect="external_side_effect",
     parameters={
         "type": "OBJECT",

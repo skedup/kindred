@@ -14,6 +14,7 @@ from kindred_capability_sdk import (
     ToolBinding,
     ToolCall,
     ToolDef,
+    ToolEffect,
     ToolResult,
     is_safe_name,
 )
@@ -51,7 +52,7 @@ class PortableAdapter:
     contribution: CapabilityContribution
 
     def registered_tools(self) -> tuple[RegisteredTool, ...]:
-        def adapt(binding: ToolBinding) -> RegisteredHandler:
+        def adapt(binding: ToolBinding, tool_effect: ToolEffect) -> RegisteredHandler:
             def handle(call: ToolCall, context: HostExecutionContext) -> HostToolResult:
                 invocation = None
                 try:
@@ -59,7 +60,7 @@ class PortableAdapter:
                         self.capability_name,
                         self.contribution.required_fact_views,
                         self.contribution.required_host_services,
-                        binding.tool_def.effect,
+                        tool_effect,
                         self.contribution.produced_artifact_profiles,
                         self.contribution.consumed_artifact_profiles,
                     )
@@ -84,7 +85,7 @@ class PortableAdapter:
                 ):
                     _discard_portable_artifacts(context, invocation)
                     return _error(call, "InvalidSideEffectFact")
-                if result.side_effect_facts and binding.tool_def.effect != "external_side_effect":
+                if result.side_effect_facts and tool_effect != "external_side_effect":
                     _discard_portable_artifacts(context, invocation)
                     return _error(call, "InvalidSideEffectFact")
                 try:
@@ -103,10 +104,14 @@ class PortableAdapter:
 
             return handle
 
-        return tuple(
-            RegisteredTool(self.capability_name, binding.tool_def, adapt(binding))
-            for binding in self.contribution.tool_bindings
-        )
+        registered: list[RegisteredTool] = []
+        for binding in self.contribution.tool_bindings:
+            tool = binding.tool_def
+            tool_effect = tool.effect
+            registered.append(
+                RegisteredTool(self.capability_name, tool, adapt(binding, tool_effect))
+            )
+        return tuple(registered)
 
 
 class CapabilityRegistry:
@@ -244,4 +249,10 @@ def _freeze(value: Any) -> Any:
 
 
 def _freeze_tool(tool: ToolDef) -> ToolDef:
-    return ToolDef(tool.name, tool.description, _freeze(tool.parameters), tool.effect)
+    return ToolDef(
+        tool.name,
+        tool.description,
+        _freeze(tool.parameters),
+        tool.effect,
+        allow_before_action_lock=tool.allow_before_action_lock,
+    )

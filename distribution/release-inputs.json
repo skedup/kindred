@@ -1,7 +1,23 @@
 {
   "schema_version": 1,
-  "release_version": "0.2.1",
-  "openclaw": {"version": "2026.6.10", "build": "aa69b12", "protocol": 4},
+  "release_version": "0.3.0",
+  "mouth_hosts": {
+    "openclaw": {
+      "maturity": "supported",
+      "platforms": ["macos-arm64", "ubuntu24-x86_64"],
+      "profiles": [
+        {"version": "2026.6.10", "build": "aa69b12", "protocol": 4, "verification": "verified"},
+        {"version": "2026.7.1-2", "build": "0790d9f", "protocol": 4, "verification": "verified"}
+      ]
+    },
+    "hermes": {
+      "maturity": "experimental",
+      "platforms": ["macos-arm64", "ubuntu24-x86_64"],
+      "profiles": [
+        {"release": "v2026.8.18", "package": "0.20.4", "verification": "verified"}
+      ]
+    }
+  },
   "build_tools": {
     "node": "22.18.0",
     "pnpm": "11.7.0",
@@ -10,11 +26,11 @@
     "pnpm_lock_sha256": "db16c548e256ee09cec71ed3a5131aea0d3c5edd9f7afdc149dc503095cc68be"
   },
   "first_party": [
-    ["kindred", "0.2.1", ".", "kindred-0.2.1-py3-none-any.whl", "16af6752f7e53d8edae6ee5538c48982f1a6aa1d8ade69df605add0ee3e6faa8"],
-    ["kindred-capability-sdk", "0.1.0", "packages/kindred-capability-sdk", "kindred_capability_sdk-0.1.0-py3-none-any.whl", "9576d7bf2fe085b028a252c84777f8aa6a99ef0b7826510444e053e0287155e0"],
-    ["kindred-capability-compose", "0.1.0", "packages/kindred-capability-compose", "kindred_capability_compose-0.1.0-py3-none-any.whl", "c583035d2b2b0525ebad291a31bd39a9a686e4b7ebf4248753202eae580e6c4a"],
-    ["kindred-capability-inventory", "0.1.0", "packages/kindred-capability-inventory", "kindred_capability_inventory-0.1.0-py3-none-any.whl", "dda9038e5b9304bd148bd8510cac3d5756cc66bbd0f5906506c260799c2857f7"],
-    ["kindred-capability-send", "0.1.0", "packages/kindred-capability-send", "kindred_capability_send-0.1.0-py3-none-any.whl", "d4db97e61326a59aa59c667f9579cd12f22857cec7446da13c7ab51fe75d4e5a"],
+    ["kindred", "0.3.0", ".", "kindred-0.3.0-py3-none-any.whl", "a286975231329e79df890d09f103f766a60211a8e04210cc8644b1727629db06"],
+    ["kindred-capability-sdk", "0.1.0", "packages/kindred-capability-sdk", "kindred_capability_sdk-0.1.0-py3-none-any.whl", "132abc9f70212a1b044abec78bf62e850bb82b3d3dd38d588e761d3e4518bc01"],
+    ["kindred-capability-compose", "0.1.0", "packages/kindred-capability-compose", "kindred_capability_compose-0.1.0-py3-none-any.whl", "50565daec9777214ec5893b5076b07fe02a3d84c021f9b7a15062e8e9036811b"],
+    ["kindred-capability-inventory", "0.1.0", "packages/kindred-capability-inventory", "kindred_capability_inventory-0.1.0-py3-none-any.whl", "94ce230f9b87d9fdd7b366d655b76c1ba7a728b9bd63786a8822e1c95218de45"],
+    ["kindred-capability-send", "0.1.0", "packages/kindred-capability-send", "kindred_capability_send-0.1.0-py3-none-any.whl", "ac9177b8c984f4dd06953f8b2726782e7457cdff940d21f4f40dde8cbc26bcc3"],
     ["kindred-capability-draw", "0.1.0", "packages/kindred-capability-draw", "kindred_capability_draw-0.1.0-py3-none-any.whl", "9831c46989d49b73e036910256ae27d6e6860a20bd6c909881059833b563f89d"]
   ],
   "platforms": {

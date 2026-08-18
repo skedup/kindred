@@ -65,11 +65,37 @@ class WorldResolution(StrictBase):
         return value
 
 
+@dataclass(frozen=True, slots=True)
+class PersonaPaths:
+    soul_full: Path
+    identity: Path
+    user: Path
+    soul_excerpt: Path
+
+    @classmethod
+    def openclaw(cls, workspace: Path) -> PersonaPaths:
+        return cls(
+            workspace / "SOUL.md",
+            workspace / "IDENTITY.md",
+            workspace / "USER.md",
+            workspace / "SOUL_excerpt.md",
+        )
+
+    @classmethod
+    def hermes(cls, home: Path) -> PersonaPaths:
+        companion = home / ".kindred/persona"
+        return cls(
+            home / "SOUL.md",
+            companion / "IDENTITY.md",
+            companion / "USER.md",
+            companion / "SOUL_excerpt.md",
+        )
+
+
 @dataclass(frozen=True)
 class ResidentInitRequest:
     resident_id: str
-    agent_id: str
-    workspace: Path
+    persona: PersonaPaths
     life_root: Path
     xdg_config_home: Path
     home_address: str

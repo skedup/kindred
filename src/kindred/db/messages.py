@@ -28,8 +28,8 @@ LLM 协议层仍是 user / assistant；仅在喂模型前由调用方映射回�
 upsert / upsert_many / get_recent / get_since_ms / get_latest /
 get_max_ts_ms / get_max_seq / count / prune。
 
-``build_from_gateway``（earlier milestone）：chat.history 单条 dict → MainSessionMessage，
-含 toolResult 跳过 / role 映射 / text_summary 压缩。
+宿主 transcript 的原始协议解析位于对应 Mouth Host wrapper；本模块只接收
+规范化后的 ``MainSessionMessage``。
 """
 
 from __future__ import annotations
@@ -397,6 +397,27 @@ def get_latest_visible_contact_expression(
     return (int(row[0]), str(row[1])) if row else None
 
 
+def get_latest_visible_partner_expression(
+    conn: sqlite3.Connection,
+    *,
+    session_key: str,
+    cursor: tuple[int, int, int],
+    now_ms: int,
+) -> int | None:
+    """取当前已读范围内最近一条非空 partner 表达的时间，不返回正文。"""
+    row = conn.execute(
+        "SELECT ts_ms FROM main_session_messages "
+        "WHERE session_key = ? "
+        "  AND (ts_ms, COALESCE(seq, -1), id) <= (?, ?, ?) "
+        "  AND ts_ms <= ? "
+        "  AND role = ? "
+        f"  AND {_STRIPPED_TEXT_SUMMARY_SQL} <> '' "
+        f"{_ORDER_DESC} LIMIT 1",  # noqa: S608
+        (session_key, *cursor, now_ms, ROLE_PARTNER),
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
 def exists_partner_after_cursor(
     conn: sqlite3.Connection,
     *,
@@ -608,71 +629,3 @@ def prune_keep_recent(
     """只保留最近 ``keep`` 条；返回删除条数。thin wrapper（含事务）。"""
     with conn:
         return _prune_keep_recent_impl(conn, session_key=session_key, keep=keep)
-
-
-# ─── chat.history → MainSessionMessage（earlier milestone 真源转换）───────────
-
-
-def build_from_gateway(
-    raw: dict[str, Any],
-    *,
-    session_key: str,
-    cached_at: str,
-) -> MainSessionMessage | None:
-    """把 Gateway ``chat.history`` 返回的单条消息 dict 转成 MainSessionMessage。
-
-    瘦身规则（与 first-party predecessor 对齐，docs §3 信息压缩）：
-
-    - ``role == "toolResult"`` → 返回 ``None``（子 agent 不看工具输出）。
-    - ``content`` 不存 JSON 原文（设为 ``None``），仅依赖 ``text_summary``。
-    - ``text_summary`` 经 :func:`extract_text_summary` 压缩
-      （toolCall 仅留 ``[tool: name]`` 占位 / image 留 ``[image]``）。
-
-    role 映射（protocol → business）：
-
-    - ``user`` → ``partner``
-    - ``assistant`` → ``my_voice``
-    - 未知 role 原样保留（如 ``system``）。
-
-    跳过规则只有 ``role == "toolResult"`` 和缺少必要 OpenClaw identity 的消息。
-
-    Parameters
-    ----------
-    raw
-        chat.history 单条消息原始 dict（含 ``role`` / ``content`` /
-        ``timestamp`` / ``__openclaw`` / 可选 ``provenance``）。
-    session_key
-        本条消息归属的 session_key（由 daemon 拉取目标决定）。
-    cached_at
-        写入本地时刻（ISO 字符串），由调用方传入便于测试与单一时钟。
-
-    Returns
-    -------
-    MainSessionMessage | None
-        ``None`` 表示应跳过该条（toolResult，或缺 ``__openclaw.id`` /
-        ``timestamp`` 等关键字段）。
-    """
-    role_protocol = str(raw.get("role") or "unknown")
-    if role_protocol == "toolResult":
-        return None
-
-    oc = raw.get("__openclaw") or {}
-    msg_id = oc.get("id")
-    if not msg_id:
-        return None
-
-    ts_ms = raw.get("timestamp")
-    if ts_ms is None:
-        return None
-
-    return MainSessionMessage(
-        id=None,
-        session_key=session_key,
-        msg_id=str(msg_id),
-        seq=oc.get("seq"),
-        role=protocol_role_to_business(role_protocol),
-        content=None,  # 不存 JSON 原文（瘦身）
-        text_summary=extract_text_summary(raw.get("content")),
-        ts_ms=int(ts_ms),
-        cached_at=cached_at,
-    )

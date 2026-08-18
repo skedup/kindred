@@ -21,6 +21,7 @@ db 路径来自 ``KindredConfig.paths.db``（走 conf/kindred.yaml）。
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -36,7 +37,7 @@ from kindred import __version__
 from kindred.capability_host.artifacts import ArtifactStore, ArtifactStoreError
 from kindred.config.loader import load_kindred_config
 from kindred.config.schema import KindredConfig
-from kindred.db import KindredDB
+from kindred.db import CURRENT_SCHEMA_VERSION, KindredDB
 from kindred.db.artifacts import ArtifactCommitRow
 from kindred.relationship.preflight import (
     RelationshipPreflightError,
@@ -50,8 +51,11 @@ from kindred.web.contracts import (
     NowResponse,
     RelationshipView,
     StreamResponse,
+    VisualStateV1,
 )
 from kindred.web.service import (
+    VisualStateProjectionError,
+    VisualStateProjector,
     build_interior_history,
     build_now,
     build_stream,
@@ -60,6 +64,8 @@ from kindred.web.service import (
     project_committed_artifact,
     read_projected_member,
 )
+
+_VISUAL_LOG = logging.getLogger("kindred.web.visual_state")
 
 # /stream 分页上限：防止单请求拉爆（一次最多一屏多一点）。
 _STREAM_MAX_LIMIT = 100
@@ -102,6 +108,52 @@ def create_app(
         version=__version__,
     )
     api = APIRouter()
+    visual_api = APIRouter(prefix="/api")
+    try:
+        visual_projector: VisualStateProjector | None = VisualStateProjector(
+            config.resident.install_id
+        )
+    except VisualStateProjectionError:
+        # ``create_app(db_path=...)`` remains a useful DB diagnostics seam.  The
+        # production ``serve`` entry point requires a committed resident before
+        # app creation, while the strict visual endpoint reports this test/debug
+        # condition as unavailable instead of inventing a shared source id.
+        visual_projector = None
+
+    def _visual_unavailable(error_class: str) -> HTTPException:
+        _VISUAL_LOG.info(
+            "visual_state_snapshot status=error error_class=%s",
+            error_class,
+        )
+        return HTTPException(
+            status_code=503,
+            detail="Visual state is unavailable",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @visual_api.get("/visual-state", response_model=VisualStateV1)
+    def visual_state(response: Response) -> VisualStateV1:
+        """Return one strict action-only snapshot from a current-schema database."""
+        response.headers["Cache-Control"] = "no-store"
+        if visual_projector is None:
+            raise _visual_unavailable("source_identity_unavailable")
+        if not resolved_db.exists():
+            raise _visual_unavailable("database_missing")
+        try:
+            with KindredDB.open_readonly(resolved_db) as db:
+                version = db.get_schema_version()
+                if version != CURRENT_SCHEMA_VERSION:
+                    raise _visual_unavailable("schema_mismatch")
+                db.validate_visual_state_schema()
+                snapshot = visual_projector.project(db)
+        except HTTPException:
+            raise
+        except sqlite3.DatabaseError as exc:
+            raise _visual_unavailable("database_unavailable") from exc
+        except (TypeError, ValueError, VisualStateProjectionError) as exc:
+            raise _visual_unavailable("invalid_projection") from exc
+        _VISUAL_LOG.info("visual_state_snapshot status=%s", snapshot.status)
+        return snapshot
 
     def _artifact_unavailable() -> HTTPException:
         return HTTPException(status_code=503, detail="Artifact view is unavailable")
@@ -143,7 +195,6 @@ def create_app(
         exists = resolved_db.exists()
         return {
             "status": "ok",
-            "db": str(resolved_db),
             "db_exists": exists,
         }
 
@@ -352,6 +403,7 @@ def create_app(
 
     app.include_router(api)
     app.include_router(api, prefix="/api", include_in_schema=False)
+    app.include_router(visual_api)
 
     if static_dir is not None:
         index_path = static_dir / "index.html"

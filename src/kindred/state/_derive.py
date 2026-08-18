@@ -5,7 +5,7 @@
 - docs/02-state-system.md §5(tick 处理顺序)+ §6(派生公式 ratified)
 - docs/02-state-system.md §6.4(arousal 独立设计)
 - docs/14-heart-graph.md §3.2(T1.sense.derive)
-- docs/discussions/2026-06-03-02-v03-derive-spec.md(archive ratified)
+- docs/archive/discussions/2026-06/2026-06-03-02-v03-derive-spec.md(archive ratified)
 
 哲学:
 
@@ -104,7 +104,8 @@ def elapsed_minutes(prev_iso: str, curr_iso: str) -> int:
     return int(delta.total_seconds() // 60)
 
 
-# 02 §3 time.phase 6 桶定义(discussions/2026-06-03-02-v03-derive-spec.md §3)
+# 02 §3 time.phase 6 桶定义
+# (docs/archive/discussions/2026-06/2026-06-03-02-v03-derive-spec.md §3)
 _PHASE_BOUNDARIES: tuple[tuple[int, int, TimePhase], ...] = (
     (5, 11, "morning"),
     (11, 13, "noon"),

@@ -85,7 +85,7 @@ def build_client_tick_graph(
     if not isinstance(client, ToolCapableLlmClient):
         raise TypeError(
             "build_client_tick_graph: act graph requires ToolCapableLlmClient; "
-            "configure a tool-capable llm.provider such as google/deepseek/openai."
+            "configure a tool-capable llm.provider such as google/deepseek/openai/xai."
         )
 
     paths = config.paths

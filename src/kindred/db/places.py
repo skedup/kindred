@@ -1,6 +1,6 @@
 """``place_visits`` 表读写 —— PlaceStore 到访事件索引（第四趴 / L3）。
 
-定位（docs/discussions/2026-07-01-location-place-store.md）：
+定位（docs/archive/discussions/2026-07/2026-07-01-location-place-store.md）：
 
 - **tick 表是真相源**；本表是从 ``tick.act_result.location_arrival`` 派生的
   读优化镜像（``episode_recall`` 同款副表模式），冲突时以 tick 为准。
@@ -256,6 +256,8 @@ def rebuild_place_visits(conn: sqlite3.Connection) -> int:
 
     与在线派生共用 :func:`derive_place_visit`——同一批输入下结果一致
     （测试锁住）。事务边界由调用方提供（facade / 测试里包 transaction）。
+    生产操作前置条件、调用示例与回退步骤见
+    ``docs/17-inventory-catalog-operations.md`` §7。
     """
     conn.execute("DELETE FROM place_visits")
     rows = conn.execute(
