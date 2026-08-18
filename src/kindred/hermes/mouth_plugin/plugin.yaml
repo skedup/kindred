@@ -1,0 +1,6 @@
+name: kindred-mouth
+version: 0.1.0
+description: Inject the approved Kindred context and companion snapshot.
+license: Apache-2.0
+hooks:
+  - pre_llm_call

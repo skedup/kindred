@@ -52,6 +52,11 @@ class RecentContactProvider:
                 cursor=cursor,
                 now_ms=now_ms,
             )
+            partner_ts_ms = self._db.get_latest_visible_partner_expression(
+                session_key=self._session_key,
+                cursor=cursor,
+                now_ms=now_ms,
+            )
         except sqlite3.Error:
             _LOG.warning("recent_contact_available=false visible=false")
             return RecentContactContext(available=False)
@@ -61,10 +66,17 @@ class RecentContactProvider:
 
         ts_ms, role = expression
         age_ms = now_ms - ts_ms
-        if age_ms >= RECENT_CONTACT_VISIBILITY_SECONDS * 1000:
+        partner_age_ms = now_ms - partner_ts_ms if partner_ts_ms is not None else None
+        visible_ms = RECENT_CONTACT_VISIBILITY_SECONDS * 1000
+        if age_ms >= visible_ms:
             return RecentContactContext(available=True)
         return RecentContactContext(
             available=True,
             recent_exchange_age_seconds=age_ms // 1000,
             recent_actor=_ACTOR_BY_ROLE[role],
+            recent_partner_message_age_seconds=(
+                partner_age_ms // 1000
+                if partner_age_ms is not None and partner_age_ms < visible_ms
+                else None
+            ),
         )

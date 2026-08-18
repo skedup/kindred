@@ -39,6 +39,7 @@ _CREDENTIAL_REFERENCES = frozenset(
         "GOOGLE_API_KEY",
         "KINDRED_GATEWAY_TOKEN",
         "OPENAI_API_KEY",
+        "XAI_API_KEY",
     }
 )
 _CREDENTIAL_PATTERN = re.compile(
@@ -46,7 +47,8 @@ _CREDENTIAL_PATTERN = re.compile(
     (?:
       (?i:["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|cookie|password|secret|
       baidu[_-]?map[_-]?(?:ak|sk)|gemini[_-]?api[_-]?key|google[_-]?api[_-]?key|
-      anthropic[_-]?api[_-]?key|deepseek[_-]?api[_-]?key|openai[_-]?api[_-]?key)["']?)
+      anthropic[_-]?api[_-]?key|deepseek[_-]?api[_-]?key|openai[_-]?api[_-]?key|
+      xai[_-]?api[_-]?key)["']?)
       \s*[:=]\s*
       (?:"(?P<double>[A-Za-z0-9_./+=~-]{12,})"|'(?P<single>[A-Za-z0-9_./+=~-]{12,})'|
       (?P<bare>[A-Za-z0-9_./+=~${}<>-]{12,}))

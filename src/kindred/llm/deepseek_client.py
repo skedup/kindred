@@ -7,14 +7,15 @@ import logging
 import os
 import time
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from kindred.llm._http_helpers import HttpClientHelpers
+from kindred.llm._http_helpers import compact_json as _compact_json
 from kindred.llm.client import LlmClientError, ToolLoopError
 from kindred.llm.real_client import (
     act_tool_loop_system_prompt_for,
-    parse_llm_json,
     system_prompt_for,
     text_fingerprint,
 )
@@ -43,6 +44,23 @@ _SCHEMA_TYPE_NAMES = frozenset({"OBJECT", "STRING", "NUMBER", "INTEGER", "BOOLEA
 
 class DeepSeekLlmClientError(LlmClientError):
     pass
+
+
+_HTTP_HELPERS = HttpClientHelpers(
+    logger=_LOG,
+    provider_name="DeepSeek",
+    client_error=DeepSeekLlmClientError,
+    request_items_key="messages",
+    request_result=("role", "tool"),
+    usage_fields={
+        "prompt_tokens": ("prompt_tokens",),
+        "prompt_cache_hit_tokens": ("prompt_cache_hit_tokens",),
+        "prompt_cache_miss_tokens": ("prompt_cache_miss_tokens",),
+        "completion_tokens": ("completion_tokens",),
+        "total_tokens": ("total_tokens",),
+        "reasoning_tokens": ("completion_tokens_details", "reasoning_tokens"),
+    },
+)
 
 
 class DeepSeekLlmClient:
@@ -85,7 +103,9 @@ class DeepSeekLlmClient:
                 role,
                 error_type="unexpected_finish",
             )
-        return _parse_json(_content(message, role), role)
+        return _HTTP_HELPERS.parse_json(
+            _content(message, role), role, protocol_error=_protocol_error
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -123,7 +143,9 @@ class DeepSeekLlmClient:
                 )
                 choice, message = _extract_choice(response, role)
             except DeepSeekLlmClientError as exc:
-                _raise_or_wrap(str(exc), events, round_index - 1, raw_text=exc.raw_text)
+                _HTTP_HELPERS.raise_or_wrap(
+                    str(exc), events, round_index - 1, raw_text=exc.raw_text
+                )
 
             finish = choice.get("finish_reason")
             raw_calls = message.get("tool_calls")
@@ -131,7 +153,7 @@ class DeepSeekLlmClient:
                 try:
                     calls, assistant = _parse_tool_calls(message, role)
                 except DeepSeekLlmClientError as exc:
-                    _raise_or_wrap(str(exc), events, round_index - 1)
+                    _HTTP_HELPERS.raise_or_wrap(str(exc), events, round_index - 1)
                 messages.append(assistant)
                 for call in calls:
                     result = (
@@ -161,19 +183,21 @@ class DeepSeekLlmClient:
                 continue
 
             if finish != "stop":
-                _raise_or_wrap(
+                _HTTP_HELPERS.raise_or_wrap(
                     f"DeepSeekLlmClient: unexpected finish={_finish_label(finish)} (role={role})",
                     events,
                     round_index - 1,
                 )
             if raw_calls not in (None, []):
-                _raise_or_wrap(
+                _HTTP_HELPERS.raise_or_wrap(
                     f"DeepSeekLlmClient: stop response contains tool_calls (role={role})",
                     events,
                     round_index - 1,
                 )
             try:
-                final = _parse_json(_content(message, role), role)
+                final = _HTTP_HELPERS.parse_json(
+                    _content(message, role), role, protocol_error=_protocol_error
+                )
             except DeepSeekLlmClientError as exc:
                 raise ToolLoopError(
                     f"DeepSeekLlmClient: invalid tool-loop final JSON (role={role})",
@@ -221,7 +245,7 @@ class DeepSeekLlmClient:
         max_rounds: int,
         tools: Sequence[ToolDef],
     ) -> httpx.Response:
-        _log_request_budget(payload, role, round_index, max_rounds, tools)
+        _HTTP_HELPERS.log_request_budget(payload, role, round_index, max_rounds, tools)
         started = time.perf_counter()
         response: httpx.Response | None = None
         transport_error_type: str | None = None
@@ -235,7 +259,9 @@ class DeepSeekLlmClient:
                 },
             )
         except httpx.HTTPError as exc:
-            _log_response_budget(None, role, round_index, time.perf_counter() - started)
+            _HTTP_HELPERS.log_response_budget(
+                None, role, round_index, time.perf_counter() - started
+            )
             transport_error_type = type(exc).__name__
         if response is None:
             assert transport_error_type is not None
@@ -243,7 +269,9 @@ class DeepSeekLlmClient:
                 "DeepSeekLlmClient: HTTP request failed "
                 f"(role={role}, model={self._model}, error_type={transport_error_type})"
             )
-        _log_response_budget(response, role, round_index, time.perf_counter() - started)
+        _HTTP_HELPERS.log_response_budget(
+            response, role, round_index, time.perf_counter() - started
+        )
         if response.status_code != httpx.codes.OK:
             raise DeepSeekLlmClientError(
                 f"DeepSeekLlmClient: HTTP {response.status_code} "
@@ -331,54 +359,10 @@ def _parse_tool_calls(message: dict[str, Any], role: Role) -> tuple[list[ToolCal
     return calls, message
 
 
-def _raise_or_wrap(
-    message: str,
-    events: list[ToolEvent],
-    rounds: int,
-    *,
-    raw_text: str | None = None,
-) -> NoReturn:
-    if events:
-        raise ToolLoopError(
-            message,
-            tool_events=events,
-            rounds=rounds,
-            raw_text=raw_text,
-        )
-    raise DeepSeekLlmClientError(message, raw_text=raw_text)
-
-
-def _parse_json(text: str, role: Role) -> dict[str, Any]:
-    try:
-        parsed = parse_llm_json(text)
-    except json.JSONDecodeError as exc:
-        _LOG.warning(
-            "DeepSeek response rejected role=%s error_type=invalid_json %s",
-            role,
-            text_fingerprint(text),
-        )
-        raise DeepSeekLlmClientError(
-            f"DeepSeekLlmClient: invalid JSON (role={role}); {text_fingerprint(text)}",
-            raw_text=text,
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise _protocol_error(
-            f"JSON root is {type(parsed).__name__}, not object",
-            role,
-            error_type="json_root_not_object",
-            fingerprint_text=text,
-        )
-    return parsed
-
-
 def _finish_label(value: object) -> str:
     if isinstance(value, str) and value in _KNOWN_FINISH_REASONS:
         return value
     return type(value).__name__
-
-
-def _compact_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _deepseek_function_declaration(tool: ToolDef) -> dict[str, Any]:
@@ -394,72 +378,3 @@ def _deepseek_function_declaration(tool: ToolDef) -> dict[str, Any]:
         elif isinstance(value, list):
             stack.extend(value)
     return declaration
-
-
-def _log_request_budget(
-    payload: dict[str, Any],
-    role: Role,
-    round_index: int,
-    max_rounds: int,
-    tools: Sequence[ToolDef],
-) -> None:
-    if not _LOG.isEnabledFor(logging.DEBUG):
-        return
-    messages = payload["messages"]
-    history = [item for item in messages[2:] if item.get("role") != "tool"]
-    results = [item for item in messages[2:] if item.get("role") == "tool"]
-    budget = {
-        "role": role,
-        "round": round_index,
-        "max_rounds": max_rounds,
-        "payload_json_bytes": len(_compact_json(payload).encode()),
-        "system_text_chars": len(messages[0]["content"]),
-        "initial_user_text_chars": len(messages[1]["content"]),
-        "tool_schema_json_chars": len(_compact_json(payload["tools"])) if tools else 0,
-        "response_schema_json_chars": 0,
-        "model_history_json_chars": len(_compact_json(history)) if history else 0,
-        "tool_result_json_chars": len(_compact_json(results)) if results else 0,
-        "tool_names": tuple(tool.name for tool in tools),
-    }
-    _LOG.debug("DeepSeek request_budget %s", budget, extra={"kindred_prompt_budget": budget})
-
-
-def _log_response_budget(
-    response: httpx.Response | None,
-    role: Role,
-    round_index: int,
-    elapsed_s: float,
-) -> None:
-    raw: dict[str, Any] = {}
-    if not _LOG.isEnabledFor(logging.DEBUG):
-        return
-    if response is not None:
-        try:
-            value = response.json().get("usage", {})
-        except (AttributeError, ValueError):
-            value = {}
-        raw = value if isinstance(value, dict) else {}
-    fields = (
-        "prompt_tokens",
-        "prompt_cache_hit_tokens",
-        "prompt_cache_miss_tokens",
-        "completion_tokens",
-        "total_tokens",
-    )
-    usage = {
-        field: value
-        for field in fields
-        if isinstance((value := raw.get(field)), int) and not isinstance(value, bool)
-    }
-    details = raw.get("completion_tokens_details")
-    reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else None
-    if isinstance(reasoning, int) and not isinstance(reasoning, bool):
-        usage["reasoning_tokens"] = reasoning
-    budget = {
-        "role": role,
-        "round": round_index,
-        "status_code": response.status_code if response is not None else None,
-        "elapsed_ms": round(elapsed_s * 1000),
-        **usage,
-    }
-    _LOG.debug("DeepSeek response_budget %s", budget, extra={"kindred_response_budget": budget})

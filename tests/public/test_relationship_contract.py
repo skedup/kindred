@@ -23,7 +23,9 @@ from kindred.graph.tick.persist import make_persist_nodes
 from kindred.graph.tick.sense_llm import _t1_sense_llm_impl
 from kindred.llm.client import LlmClient, Role
 from kindred.llm.tools import ToolLoopResult
+from kindred.mouth_host.model import OpenClawRuntimeModel
 from kindred.observability import DebugDumpConfig, PromptDumper
+from kindred.openclaw import OpenClawWire
 from kindred.relationship import render_relationship_summary
 from kindred.relationship.models import (
     RelationshipChange,
@@ -36,6 +38,7 @@ from kindred.relationship.projector import (
     project_relationship_change,
     project_relationship_evidence,
 )
+from kindred.resident import PersonaPaths
 from kindred.state._seed import make_doc_example_state
 from kindred.state.tick import TickState
 from kindred.web.app import create_app
@@ -52,6 +55,27 @@ def _profile(**updates: object) -> RelationshipProfile:
     }
     values.update(updates)
     return RelationshipProfile.model_validate(values)
+
+
+def _openclaw_model(workspace: Path) -> OpenClawRuntimeModel:
+    wire = OpenClawWire.model_validate(
+        {
+            "transcript_session": "agent:resident:synthetic:direct:peer",
+            "approved_peer": {
+                "provider": "synthetic",
+                "account_id": "account",
+                "target": "peer",
+            },
+            "outbound_route": {
+                "channel": "synthetic",
+                "account_id": "account",
+                "target": "peer",
+            },
+        }
+    )
+    return OpenClawRuntimeModel(
+        kind="openclaw", wire=wire, agent_id="resident", workspace=workspace
+    )
 
 
 class _Reader:
@@ -367,12 +391,11 @@ def test_installer_relationship_stage_bootstraps_missing_user_once(
             }
         },
     )
-    config = replace(config, resident=replace(config.resident, workspace=workspace))
-    agent = installer._Agent(config.resident.agent_id, workspace, "Resident")
     monkeypatch.setattr(installer.click, "echo", lambda *_args, **_kwargs: None)
 
-    installer._ensure_relationship(config, agent)
-    installer._ensure_relationship(config, agent)
+    persona = PersonaPaths.openclaw(workspace)
+    installer._ensure_relationship(config, persona)
+    installer._ensure_relationship(config, persona)
     _require_relationship_runtime(config)
 
     with KindredDB.open_readonly(config.paths.db) as db:
@@ -413,7 +436,7 @@ def test_doctor_structural_check_fails_closed_without_relationship(
             }
         },
     )
-    config = replace(config, resident=replace(config.resident, workspace=workspace))
+    config = replace(config, mouth_host=_openclaw_model(workspace))
 
     def inject(context: object) -> str:
         context.config = config  # type: ignore[attr-defined]
@@ -421,7 +444,7 @@ def test_doctor_structural_check_fails_closed_without_relationship(
 
     monkeypatch.setattr(doctor, "_config", inject)
     monkeypatch.setattr(doctor, "require_committed_resident", lambda _config: None)
-    for name in ("_openclaw_local", "_capabilities", "_llm_config", "_services"):
+    for name in ("_mouth_host_local", "_capabilities", "_llm_config", "_services"):
         monkeypatch.setattr(doctor, name, lambda _context: "synthetic ok")
     monkeypatch.setattr(doctor, "_life_assets", lambda: "synthetic ok")
 

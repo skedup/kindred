@@ -24,9 +24,47 @@ schema.sql 可以重构，只要 service 层适配，前端契约不变。
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class VisualActionV1(BaseModel):
+    """One validated action semantic consumed by the desktop visual pack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+
+
+class VisualStateEmptyV1(BaseModel):
+    """Current-schema database with no committed tick yet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    source_id: str = Field(min_length=1)
+    status: Literal["empty"] = "empty"
+
+
+class VisualStateReadyV1(BaseModel):
+    """Latest committed action-only resident projection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    source_id: str = Field(min_length=1)
+    status: Literal["ready"] = "ready"
+    revision: int = Field(ge=1)
+    committed_at: str = Field(min_length=1)
+    motion_instance_id: str = Field(pattern=r"^tick:[1-9][0-9]*$")
+    action: VisualActionV1 | None
+
+
+VisualStateV1: TypeAlias = Annotated[
+    VisualStateEmptyV1 | VisualStateReadyV1,
+    Field(discriminator="status"),
+]
 
 
 class Gauge(BaseModel):

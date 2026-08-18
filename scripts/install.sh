@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION=0.2.1; OPENCLAW_VERSION='OpenClaw 2026.6.10 (aa69b12)'
+VERSION=0.3.0
 BASE_URL=${KINDRED_RELEASE_BASE_URL:-https://github.com/skedup/kindred/releases/download/v$VERSION}
 DATA_HOME=${XDG_DATA_HOME:-"$HOME/.local/share"}; RUNTIME_ROOT="$DATA_HOME/kindred/runtime"
 BIN_DIR="$HOME/.local/bin"
@@ -30,7 +30,6 @@ platform() {
   esac
 }
 
-[ "$(openclaw --version 2>/dev/null || true)" = "$OPENCLAW_VERSION" ] || fail 'unsupported OpenClaw version or build'
 PLATFORM=$(platform)
 
 for marker in "$RUNTIME_ROOT"/*/.kindred-release-version; do [ ! -f "$marker" ] || [ "$(cat "$marker")" = "$VERSION" ] || fail 'a different Kindred version is already installed'; done
@@ -84,5 +83,5 @@ PY
 "$FINAL/python/bin/python3" -m venv "$FINAL/venv"; "$FINAL/venv/bin/python" "$TMP/install.py" install "$TMP/manifest.json" "$FINAL/wheelhouse" "$TMP/$BUNDLE" "$PLATFORM" "$VERSION" "${KINDRED_NO_WEB:-0}"
 
 printf '%s\n' "$VERSION" >"$FINAL/.kindred-release-version"; mkdir -p "$BIN_DIR"; ln -sfn "$FINAL/venv/bin/kindred" "$BIN_DIR/kindred"
-[ -t 1 ] && [ -r /dev/tty ] && exec "$BIN_DIR/kindred" openclaw install </dev/tty >/dev/tty
-printf 'Kindred runtime installed. Continue in a terminal:\n  %s openclaw install\n' "$BIN_DIR/kindred"
+[ -t 1 ] && [ -r /dev/tty ] && exec "$BIN_DIR/kindred" install </dev/tty >/dev/tty
+printf 'Kindred runtime installed. Continue in a terminal:\n  %s install\n' "$BIN_DIR/kindred"

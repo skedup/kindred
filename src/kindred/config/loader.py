@@ -13,7 +13,7 @@ from typing import Any, TypeAlias, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from kindred.config.schema import (
     KindredCapabilityConfig,
@@ -29,6 +29,11 @@ from kindred.config.schema import (
     KindredWorldConfig,
 )
 from kindred.config.secrets import KindredSecretError, merge_runtime_secrets
+from kindred.hermes.wire import HermesWire
+from kindred.mouth_host.model import (
+    HostRuntimeModel,
+    OpenClawRuntimeModel,
+)
 from kindred.openclaw import OpenClawWire
 
 
@@ -57,6 +62,8 @@ ENV_SESSION_KEY = "KINDRED_SESSION_KEY"
 ENV_GATEWAY_HOST = "KINDRED_GATEWAY_HOST"
 ENV_GATEWAY_PORT = "KINDRED_GATEWAY_PORT"
 ENV_GATEWAY_TOKEN = "KINDRED_GATEWAY_TOKEN"
+ENV_WEB_HOST = "KINDRED_WEB_HOST"
+ENV_WEB_PORT = "KINDRED_WEB_PORT"
 ENV_REVEAL_INTIMATE = "KINDRED_WEB_REVEAL_INTIMATE"
 ENV_LOCATION_PROVIDER = "KINDRED_WORLD_LOCATION_PROVIDER"
 ENV_WEATHER_PROVIDER = "KINDRED_WORLD_WEATHER_PROVIDER"
@@ -67,13 +74,14 @@ ENV_WORLD_TIMEZONE = "KINDRED_WORLD_TIMEZONE"
 
 _DEFAULT_CONFIG_RESOURCE = "defaults/kindred.yaml"
 _VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
-_VALID_LLM_PROVIDERS = frozenset({"anthropic", "claude_code", "google", "deepseek", "openai"})
+_VALID_LLM_PROVIDERS = frozenset(
+    {"anthropic", "claude_code", "google", "deepseek", "openai", "xai"}
+)
 # 世界 Provider 层（能呼吸的世界）：地点能力 / 天气 Provider 合法取值。
 _VALID_LOCATION_PROVIDERS = frozenset({"none", "virtual", "baidu"})
 _VALID_WEATHER_PROVIDERS = frozenset({"virtual", "wttr"})
 _CAPABILITIES_SECTION = "capabilities"
-_OPENCLAW_SECTION = "openclaw"
-_OPENCLAW_KEYS = frozenset({"transcript_session", "approved_peer", "outbound_route"})
+_MOUTH_HOST_SECTION = "mouth_host"
 _CAPABILITY_KEYS = frozenset({"enabled", "settings", "side_effect_activities"})
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on", "y"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off", "n", ""})
@@ -128,12 +136,17 @@ def _validate_known_keys(raw: Mapping[str, Any]) -> None:
         if section_name == _CAPABILITIES_SECTION:
             _validate_capabilities_keys(section)
             continue
-        if section_name == _OPENCLAW_SECTION:
-            _validate_openclaw_keys(section)
+        if section_name == _MOUTH_HOST_SECTION:
+            _validate_mouth_host_keys(section)
             continue
         known = _KNOWN_KEYS.get(section_name)
         if known is None:
-            known_sections = sorted((*_KNOWN_KEYS, _OPENCLAW_SECTION))
+            if section_name == "openclaw":
+                raise KindredConfigError(
+                    "legacy OpenClaw config is unsupported; remove top-level openclaw and "
+                    "resident.agent_id/resident.workspace, then rerun kindred install"
+                )
+            known_sections = sorted((*_KNOWN_KEYS, _MOUTH_HOST_SECTION))
             raise KindredConfigError(
                 f"unknown config section: {section_name!r} (known: {', '.join(known_sections)})"
             )
@@ -141,21 +154,20 @@ def _validate_known_keys(raw: Mapping[str, Any]) -> None:
             continue
         for key in section:
             if key not in known:
+                if section_name == "resident" and key in {"agent_id", "workspace"}:
+                    raise KindredConfigError(
+                        "legacy OpenClaw config is unsupported; remove top-level openclaw and "
+                        "resident.agent_id/resident.workspace, then rerun kindred install"
+                    )
                 raise KindredConfigError(
                     f"unknown config key: {section_name}.{key} "
                     f"(known in {section_name}: {', '.join(sorted(known))})"
                 )
 
 
-def _validate_openclaw_keys(section: Any) -> None:
+def _validate_mouth_host_keys(section: Any) -> None:
     if not isinstance(section, Mapping):
-        raise KindredConfigError("openclaw must be a mapping")
-    for key in section:
-        if key not in _OPENCLAW_KEYS:
-            raise KindredConfigError(
-                f"unknown config key: openclaw.{key} "
-                f"(known in openclaw: {', '.join(sorted(_OPENCLAW_KEYS))})"
-            )
+        raise KindredConfigError("mouth_host must be a mapping")
 
 
 def _validate_capabilities_keys(section: Any) -> None:
@@ -349,6 +361,11 @@ _ENV_OVERRIDES = {
         lambda value, field: _parse_int(value, field),
     ),
     ENV_GATEWAY_TOKEN: _EnvOverride("gateway.token"),
+    ENV_WEB_HOST: _EnvOverride("web.host"),
+    ENV_WEB_PORT: _EnvOverride(
+        "web.port",
+        lambda value, field: _parse_int(value, field),
+    ),
     ENV_REVEAL_INTIMATE: _EnvOverride(
         "web.reveal_intimate",
         lambda value, field: _parse_bool(value, field),
@@ -385,9 +402,9 @@ def _build_config(raw: Mapping[str, Any]) -> KindredConfig:
     debug_raw = _section(raw, "debug")
 
     daemon = _build_daemon(_section(raw, "daemon"), paths)
-    openclaw = _build_openclaw(_section(raw, _OPENCLAW_SECTION))
-    if openclaw is not None and openclaw.transcript_session != daemon.session_key:
-        raise KindredConfigError("openclaw.transcript_session must match daemon.session_key")
+    mouth_host = _build_mouth_host(_section(raw, _MOUTH_HOST_SECTION))
+    if mouth_host is not None and _canonical_transcript(mouth_host) != daemon.session_key:
+        raise KindredConfigError("mouth_host canonical transcript must match daemon.session_key")
     return KindredConfig(
         paths=paths,
         llm=KindredLlmConfig(
@@ -409,7 +426,7 @@ def _build_config(raw: Mapping[str, Any]) -> KindredConfig:
         ),
         daemon=daemon,
         gateway=_build_gateway(_section(raw, "gateway")),
-        openclaw=openclaw,
+        mouth_host=mouth_host,
         web=_build_web(_section(raw, "web")),
         world=_build_world(_section(raw, "world")),
         resident=_build_resident(_section(raw, "resident")),
@@ -435,20 +452,57 @@ def _build_gateway(gateway_raw: Mapping[str, Any]) -> KindredGatewayConfig:
     )
 
 
-def _build_openclaw(openclaw_raw: Mapping[str, Any]) -> OpenClawWire | None:
-    if not openclaw_raw:
+def _build_mouth_host(raw: Mapping[str, Any]) -> HostRuntimeModel | None:
+    if not raw:
         return None
     try:
-        return OpenClawWire.model_validate(openclaw_raw)
-    except ValidationError as exc:
-        paths = sorted(
-            ".".join(str(part) for part in error["loc"]) or "<root>" for error in exc.errors()
+        kind = raw.get("kind")
+        wire_raw = raw.get("wire")
+        if not isinstance(wire_raw, Mapping):
+            raise ValueError
+        values = dict(raw)
+        if kind == "openclaw":
+            values["wire"] = OpenClawWire.model_validate(wire_raw)
+            values["workspace"] = Path(_strict_text(raw.get("workspace")))
+        elif kind == "hermes":
+            identity = raw.get("identity")
+            if not isinstance(identity, list) or len(identity) != 2:
+                raise ValueError
+            wire_values = dict(wire_raw)
+            wire_values["host_executable"] = Path(_strict_text(wire_values.get("host_executable")))
+            wire_values["host_home"] = Path(_strict_text(wire_values.get("host_home")))
+            values["wire"] = HermesWire(**wire_values)
+            values["identity"] = tuple(_strict_text(value) for value in identity)
+        else:
+            raise ValueError
+        return TypeAdapter(HostRuntimeModel).validate_python(values)
+    except (TypeError, ValueError, ValidationError) as exc:
+        paths = (
+            sorted(
+                ".".join(str(part) for part in error["loc"]) or "<root>" for error in exc.errors()
+            )
+            if isinstance(exc, ValidationError)
+            else ["<root>"]
         )
-        raise KindredConfigError("invalid openclaw wire at: " + ", ".join(paths)) from None
+        raise KindredConfigError("invalid mouth_host at: " + ", ".join(paths)) from None
+
+
+def _strict_text(value: Any) -> str:
+    if type(value) is not str or not value.strip() or value != value.strip():
+        raise ValueError
+    return value
+
+
+def _canonical_transcript(model: HostRuntimeModel) -> str:
+    if isinstance(model, OpenClawRuntimeModel):
+        return model.wire.transcript_session
+    return model.wire.canonical_session_id
 
 
 def _build_web(web_raw: Mapping[str, Any]) -> KindredWebConfig:
     return KindredWebConfig(
+        host=_str_value(web_raw, "host"),
+        port=_tcp_port_value(web_raw, "port"),
         reveal_intimate=_bool_value(web_raw, "reveal_intimate"),
     )
 
@@ -478,8 +532,6 @@ def _build_resident(resident_raw: Mapping[str, Any]) -> KindredResidentConfig:
     return KindredResidentConfig(
         install_id=_str_value(resident_raw, "install_id", allow_empty=True),
         resident_id=_str_value(resident_raw, "resident_id", allow_empty=True),
-        agent_id=_str_value(resident_raw, "agent_id", allow_empty=True),
-        workspace=_optional_path_value(resident_raw, "workspace"),
         marker_path=_optional_path_value(resident_raw, "marker_path"),
         secrets_file=_optional_path_value(resident_raw, "secrets_file"),
     )
@@ -604,6 +656,13 @@ def _positive_int_value(raw: Mapping[str, Any], key: str) -> int:
     return value
 
 
+def _tcp_port_value(raw: Mapping[str, Any], key: str) -> int:
+    value = _int_value(raw, key)
+    if not 1 <= value <= 65535:
+        raise KindredConfigError(f"{key} must be between 1 and 65535, got {value}")
+    return value
+
+
 def _parse_int(value: str, field: str) -> int:
     try:
         return int(value.strip())
@@ -702,6 +761,8 @@ DEFAULT_PID_FILE = DEFAULT_CONFIG.daemon.pid_file
 DEFAULT_LOG_FILE = DEFAULT_CONFIG.daemon.log_file
 DEFAULT_GATEWAY_HOST = DEFAULT_CONFIG.gateway.host
 DEFAULT_GATEWAY_PORT = DEFAULT_CONFIG.gateway.port
+DEFAULT_WEB_HOST = DEFAULT_CONFIG.web.host
+DEFAULT_WEB_PORT = DEFAULT_CONFIG.web.port
 DEFAULT_LOCATION_PROVIDER = DEFAULT_CONFIG.world.location_provider
 DEFAULT_WEATHER_PROVIDER = DEFAULT_CONFIG.world.weather_provider
 DEFAULT_WEATHER_TTL_MINUTES = DEFAULT_CONFIG.world.weather_ttl_minutes

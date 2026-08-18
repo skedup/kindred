@@ -58,7 +58,8 @@ watcher 无 pending/ack。sense_io 读取非空页后立即推进 cursor：读�
 
 旧方案 Y 曾让 watcher 持内存 buffer / pending、打包 ``payload={"messages":[...]}``、
 daemon invoke 成功后 ``ack`` 推 committed 游标。路 X / earlier milestone 已全部移除，cursor 写权
-收敛到 sense_io。完整演进见 ``docs/discussions/2026-06-18-cursor-unified-consume.md``。
+收敛到 sense_io。完整演进见
+``docs/archive/discussions/2026-06/2026-06-18-cursor-unified-consume.md``。
 """
 
 from __future__ import annotations

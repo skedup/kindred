@@ -301,9 +301,7 @@ def stop(pid_file: Path) -> int:
     # 拿不到锁 = 有活持锁者。此时才读 pid+starttime 做 owner 校验（N-6）。
     pid, recorded_start = read_owner(pid_file)
     if pid is None:
-        raise OwnerNotReadyError(
-            f"daemon 正在启动（已持锁但 pid 未就绪），稍后重试：{pid_file}"
-        )
+        raise OwnerNotReadyError(f"daemon 正在启动（已持锁但 pid 未就绪），稍后重试：{pid_file}")
     if not pid_is_alive(pid):
         raise OwnerNotReadyError(
             f"pid_file 记录的 pid={pid} 已死但锁仍被持有（owner 未就绪），稍后重试：{pid_file}"

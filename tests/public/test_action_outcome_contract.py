@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from kindred.graph.tick._act_location import LOCATION_KERNEL_TOOL_DEFS
 from kindred.graph.tick._act_outcome import (
     ACTION_OUTCOME_TOOL_DEFS,
     ActionOutcomeKernelSession,
 )
 from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
-from kindred_capability_sdk import ToolCall
+from kindred.location.capability import FIND_PLACES_TOOL
+from kindred_capability_compose.plugin import WRITE_COMPOSE
+from kindred_capability_inventory.plugin import LIST_INVENTORY
+from kindred_capability_sdk import ToolCall, ToolDef
+from kindred_capability_send.plugin import SEND_TO_USER
 
 _STARTED_AT = "2026-08-04T10:00:00+08:00"
 
@@ -66,14 +73,34 @@ def test_same_step_does_not_fabricate_a_second_outcome() -> None:
     session.validate_committed({"current_state": "eat", "affect": {"stress": -3}})
 
 
+def test_tool_defs_declare_pre_lock_policy_without_exposing_it_to_providers() -> None:
+    location = {tool.name: tool for tool in LOCATION_KERNEL_TOOL_DEFS}
+
+    assert FIND_PLACES_TOOL.allow_before_action_lock is True
+    assert LIST_INVENTORY.allow_before_action_lock is True
+    assert location["choose_destination"].allow_before_action_lock is True
+    assert location["arrive"].allow_before_action_lock is False
+    assert WRITE_COMPOSE.allow_before_action_lock is False
+    assert SEND_TO_USER.allow_before_action_lock is False
+    assert "allow_before_action_lock" not in FIND_PLACES_TOOL.function_declaration()
+    with pytest.raises(ValueError, match="only preparation tools"):
+        ToolDef(
+            "unsafe_preparation",
+            "unsafe",
+            {"type": "OBJECT", "properties": {}},
+            "external_side_effect",
+            allow_before_action_lock=True,
+        )
+
+
 def test_locked_action_controls_capability_and_location_binding() -> None:
     draw = _session()
     artifact = _call("draw_image", {"prompt": "synthetic scene"}, "draw")
-    rejected = draw.guard_tool(artifact, owner="draw", effect="artifact_write")
+    rejected = draw.guard_tool(artifact, owner="draw")
     assert rejected is not None and rejected.response["error_type"] == "ActionLockRequired"
 
     draw.handle(_call("lock_action", {"action_step": "draw"}, "lock"))
-    assert draw.guard_tool(artifact, owner="draw", effect="artifact_write") is None
+    assert draw.guard_tool(artifact, owner="draw") is None
 
     walk = _session(kind="advance_activity", prior_step="makeup")
     walk.handle(_call("lock_action", {"action_step": "walk"}, "lock"))

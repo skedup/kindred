@@ -494,14 +494,8 @@ def _render_now_section(
 
 
 def _weather_lines(env: Environment) -> list[str]:
-    """09 §4.4.1 NOW 段「天气」(+「天象」) 行——让心每次睁眼都感到此刻的世界。
-
-    增强字段（体感/湿度/风/月相/日出日落/UV/降水）缺测则跳过——既往 state（无这些
-    字段）只渲染 weather + temperature，向后兼容。
-    """
+    """09 §4.4.1 NOW 段「天气」(+「天象」) 行。"""
     weather_bits = [env.weather, f"{env.temperature:g}°C"]
-    if env.feels_like:
-        weather_bits.append(f"体感{env.feels_like:g}°C")
     if env.humidity:
         weather_bits.append(f"湿度{env.humidity}%")
     if env.wind:

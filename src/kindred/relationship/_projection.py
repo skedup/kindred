@@ -12,6 +12,9 @@ from kindred.relationship.models import RelationshipBootstrap
 
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com"
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
+_XAI_BASE_URL = "https://api.x.ai/v1"
+_OPENAI_TIMEOUT_S = 60.0
+_XAI_TIMEOUT_S = 300.0
 _SYSTEM = (
     "只根据给定 USER 文档投影 ta 当前如何看待这个 user。输出严格 JSON："
     "declared_role 只能是 unlabeled、friend、lover、hostile，叙事不明确时用 unlabeled；"
@@ -71,6 +74,55 @@ def make_openai_relationship_projector(
 ) -> Callable[[str], RelationshipBootstrap]:
     """Build the USER-only projector for the configured OpenAI Responses API."""
 
+    return _make_responses_relationship_projector(
+        api_key=api_key,
+        model=model,
+        base_url=base_url or _OPENAI_BASE_URL,
+        include_verbosity=True,
+        timeout_s=_OPENAI_TIMEOUT_S,
+        transport=transport,
+    )
+
+
+def make_xai_relationship_projector(
+    *,
+    api_key: str,
+    model: str,
+    base_url: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> Callable[[str], RelationshipBootstrap]:
+    """Build the USER-only projector for the configured xAI Responses API."""
+
+    return _make_responses_relationship_projector(
+        api_key=api_key,
+        model=model,
+        base_url=base_url or _XAI_BASE_URL,
+        include_verbosity=False,
+        timeout_s=_XAI_TIMEOUT_S,
+        transport=transport,
+    )
+
+
+def _make_responses_relationship_projector(
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+    include_verbosity: bool,
+    timeout_s: float,
+    transport: httpx.BaseTransport | None,
+) -> Callable[[str], RelationshipBootstrap]:
+    text: dict[str, Any] = {
+        "format": {
+            "type": "json_schema",
+            "name": "relationship_bootstrap",
+            "strict": True,
+            "schema": RelationshipBootstrap.model_json_schema(),
+        }
+    }
+    if include_verbosity:
+        text["verbosity"] = "low"
+
     def project(user_text: str) -> RelationshipBootstrap:
         payload: dict[str, Any] = {
             "model": model,
@@ -78,24 +130,16 @@ def make_openai_relationship_projector(
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": f"<USER>\n{user_text}\n</USER>"},
             ],
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "relationship_bootstrap",
-                    "strict": True,
-                    "schema": RelationshipBootstrap.model_json_schema(),
-                },
-                "verbosity": "low",
-            },
+            "text": text,
             "reasoning": {"effort": "high"},
             "max_output_tokens": 512,
             "store": False,
             "stream": False,
         }
         try:
-            with httpx.Client(timeout=60, transport=transport) as client:
+            with httpx.Client(timeout=timeout_s, transport=transport) as client:
                 response = client.post(
-                    f"{(base_url or _OPENAI_BASE_URL).rstrip('/')}/responses",
+                    f"{base_url.rstrip('/')}/responses",
                     json=payload,
                     headers={
                         "Authorization": f"Bearer {api_key}",

@@ -40,7 +40,49 @@ def _load_inputs(root: Path) -> dict[str, Any]:
     expected_wheel = f"kindred-{version}-py3-none-any.whl"
     if len(root_rows) != 1 or root_rows[0][1:4] != [version, ".", expected_wheel]:
         raise ReleaseBuildError("release version does not match the root wheel")
+    _validate_mouth_hosts(value.get("mouth_hosts"), set(value.get("platforms", {})))
     return value
+
+
+def _validate_mouth_hosts(value: object, platforms: set[str]) -> None:
+    if not isinstance(value, dict) or set(value) != {"openclaw", "hermes"}:
+        raise ReleaseBuildError("Mouth Host release matrix is invalid")
+    expected = {
+        "openclaw": ({"version", "build", "protocol", "verification"}, "supported", 2),
+        "hermes": ({"release", "package", "verification"}, "experimental", 1),
+    }
+    for kind, (profile_keys, maturity, count) in expected.items():
+        host = value[kind]
+        host_platforms = host.get("platforms") if isinstance(host, dict) else None
+        profiles = host.get("profiles") if isinstance(host, dict) else None
+        if (
+            not isinstance(host, dict)
+            or set(host) != {"maturity", "platforms", "profiles"}
+            or host["maturity"] != maturity
+            or not isinstance(host_platforms, list)
+            or any(not isinstance(platform, str) for platform in host_platforms)
+            or set(host_platforms) != platforms
+            or not isinstance(profiles, list)
+            or len(profiles) != count
+            or any(
+                not isinstance(profile, dict)
+                or set(profile) != profile_keys
+                or profile["verification"] != "verified"
+                or not _valid_host_profile(kind, profile)
+                for profile in profiles
+            )
+        ):
+            raise ReleaseBuildError("Mouth Host release matrix is invalid")
+
+
+def _valid_host_profile(kind: str, profile: dict[str, object]) -> bool:
+    if kind == "openclaw":
+        return (
+            all(type(profile[key]) is str and bool(profile[key]) for key in ("version", "build"))
+            and type(profile["protocol"]) is int
+            and profile["protocol"] > 0
+        )
+    return all(type(profile[key]) is str and bool(profile[key]) for key in ("release", "package"))
 
 
 def _verify(path: Path, *, size: int | None = None, digest: str) -> None:
@@ -128,8 +170,11 @@ def _tar_bundle(source: Path, destination: Path) -> None:
 
 
 def _plugin_checksum(root: Path) -> str:
+    return _tree_checksum(root / "src/kindred/openclaw/mouth_plugin")
+
+
+def _tree_checksum(plugin: Path) -> str:
     digest = hashlib.sha256()
-    plugin = root / "src/kindred/openclaw/mouth_plugin"
     for path in sorted(plugin.rglob("*")):
         if path.is_symlink():
             raise ReleaseBuildError("Mouth Plugin tree is invalid")
@@ -138,6 +183,17 @@ def _plugin_checksum(root: Path) -> str:
             digest.update(b"\0")
             digest.update(path.read_bytes())
             digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _hermes_plugin_checksum(root: Path) -> str:
+    plugin = root / "src/kindred/hermes/mouth_plugin"
+    digest = hashlib.sha256()
+    for name in ("__init__.py", "plugin.yaml"):
+        digest.update(name.encode())
+        digest.update(b"\0")
+        digest.update((plugin / name).read_bytes())
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -150,6 +206,17 @@ def _plugin_version(root: Path) -> str:
     if not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
         raise ReleaseBuildError("Mouth Plugin version is invalid")
     return version
+
+
+def _hermes_plugin_version(root: Path) -> str:
+    try:
+        text = (root / "src/kindred/hermes/mouth_plugin/plugin.yaml").read_text()
+    except (OSError, UnicodeError) as exc:
+        raise ReleaseBuildError("Hermes Mouth Plugin version is unreadable") from exc
+    match = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", text, re.MULTILINE)
+    if match is None:
+        raise ReleaseBuildError("Hermes Mouth Plugin version is invalid")
+    return match.group(1)
 
 
 def _notices(inputs: dict[str, Any], wheels: list[dict[str, Any]]) -> str:
@@ -297,12 +364,18 @@ def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
         manifest = {
             "schema_version": 1,
             "release_version": inputs["release_version"],
-            "openclaw": inputs["openclaw"],
+            "mouth_hosts": inputs["mouth_hosts"],
             "build_tools": inputs["build_tools"],
             "life_assets": {"actions": 13, "activities": 7},
-            "mouth_plugin": {
-                "version": _plugin_version(root),
-                "sha256": _plugin_checksum(root),
+            "mouth_plugins": {
+                "openclaw": {
+                    "version": _plugin_version(root),
+                    "sha256": _plugin_checksum(root),
+                },
+                "hermes": {
+                    "version": _hermes_plugin_version(root),
+                    "sha256": _hermes_plugin_checksum(root),
+                },
             },
             "web": {"included": True, "build": web},
             "draw": {"included": True, "enabled_by_default": False},

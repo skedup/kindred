@@ -25,7 +25,7 @@ mock/拓扑测试，并使用既有默认 baseline。
   后续由 T1.sense.llm 的外部观察 projector 按实际变化更新
 
 详 ``state/_derive.py`` docstring 与
-``docs/discussions/2026-06-03-02-v03-derive-spec.md``。
+``docs/archive/discussions/2026-06/2026-06-03-02-v03-derive-spec.md``。
 """
 
 from __future__ import annotations

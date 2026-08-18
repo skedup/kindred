@@ -1,6 +1,6 @@
 ---
 name: install-kindred
-description: Install or repair Kindred for an existing supported OpenClaw resident when the operator explicitly asks for Kindred setup.
+description: Install or repair Kindred for an existing supported Mouth host when the operator explicitly asks for Kindred setup.
 ---
 
 # Install Kindred
@@ -8,12 +8,13 @@ description: Install or repair Kindred for an existing supported OpenClaw reside
 Use the canonical Kindred release bootstrap and interactive installer. Do not reproduce their
 installation logic.
 
-1. Explain that the host must be macOS 14+ arm64 or Ubuntu 24.04 x86_64 and must already run the
-   exact OpenClaw version named by the release.
+1. Explain that the machine must be macOS 14+ arm64 or Ubuntu 24.04 x86_64 and must already run a
+   Mouth host identity listed by the installed Kindred release. Experimental and unverified identities
+   remain clearly labeled; the Python installer performs the real host contract checks.
 2. Explain that Heart needs an LLM credential and home resolution needs a map credential. Never ask
    the operator to paste a credential into chat.
 3. Run only the operator-approved, versioned bootstrap from the official release. It installs local
-   verified bytes and continues into `kindred openclaw install` on a controlling TTY.
+   verified bytes without probing the Mouth host, then continues into `kindred install` on a controlling TTY.
 4. When the installer requests a credential, pause and ask the operator to continue in a secure
    terminal. Do not relay, inspect, or store the value.
 5. After installation, run `kindred doctor --json`. Summarize check ids and statuses without showing

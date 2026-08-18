@@ -103,7 +103,6 @@ class ActPromptContext:
     possession_facts_section: str = ""
     expression_context_section: str = ""
     relationship_summary: str = ""
-    decision_reason: str = ""
     sense_note: str = ""
     current_engagement: float | None = None
 
@@ -261,10 +260,8 @@ def _render_artifact_section(artifacts: tuple[tuple[str, str], ...]) -> str:
 
 
 def _render_decision_handoff(context: ActPromptContext) -> str:
-    """把 Sense 已消化的决策依据紧凑交给 Act，不重复投影原始处境。"""
+    """把 Sense 已形成的本拍心声紧凑交给 Act，不重复投影原始处境。"""
     lines: list[str] = []
-    if context.decision_reason:
-        lines.append(f"- 决定缘由：{context.decision_reason}")
     if context.sense_note:
         lines.append(f"- 本拍心声：{context.sense_note}")
     return "## 这一拍的行动依据\n" + "\n".join(lines) if lines else ""

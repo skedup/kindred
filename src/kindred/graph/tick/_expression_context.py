@@ -14,7 +14,6 @@ class ExpressionContext:
     possession_lines: tuple[str, ...] = ()
     activity_line: str = ""
     sense_note: str = ""
-    decision_reason: str = ""
     ambience: str = ""
     thoughts: tuple[str, ...] = ()
 
@@ -25,7 +24,6 @@ def project_expression_context(
     triggered_at: object,
     soul_excerpt: str,
     sense_note: object,
-    decision_reason: object,
     weather_ttl_minutes: int,
     weather_location: str,
 ) -> ExpressionContext:
@@ -49,7 +47,6 @@ def project_expression_context(
             metric
             for key, label, unit in (
                 ("temperature", "气温", "°C"),
-                ("feels_like", "体感", "°C"),
                 ("precip_mm", "降水", "mm"),
             )
             if (metric := _metric(environment.get(key), label, unit))
@@ -62,7 +59,6 @@ def project_expression_context(
         possession_lines=expression_possession_fact_lines(state),
         activity_line=_activity_line(state.get("activity")),
         sense_note=_text(sense_note, 130),
-        decision_reason=_text(decision_reason, 130),
         ambience=_text(environment.get("ambience"), 160)
         if isinstance(environment, Mapping)
         else "",

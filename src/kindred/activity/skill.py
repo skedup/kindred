@@ -19,7 +19,9 @@
 > 得靠一串原子动作组合达成的 = 高级意图（explore_food / dine_out）。
 
 **权威**：结构见 ``2026-06-18-atomic-actions.md``；上文“基准 effect”在 LD4 中仅指通常体验软先验，
-当前 effect 见 ``2026-08-04-experience-appraisal-and-descriptive-interior.md``；docs/15 archived。
+当前 effect 见：
+``docs/archive/discussions/2026-08/2026-08-04-experience-appraisal-and-descriptive-interior.md``
+docs/15 archived。
 
 本模块只做 **read + 解析 + 校验**；state_effects 生效见 ``resolve_step_effects``，
 状态推进见 ``graph/tick/act_llm.py``。
@@ -370,31 +372,6 @@ def _validate_bind_places_against_actions(
             )
 
 
-def clamp_to_magnitude(
-    current: int, proposed: int, *, direction: Direction, magnitude: Magnitude
-) -> int:
-    """把心给出的 ``proposed`` next 值，按档位硬区间 + 方向 clamp 回合法范围。
-
-    docs/15 §3 / 6/08 决策：心读「当前值 + 所在 state 的档位」算出 next 值（覆写
-    语义，非 delta）。本函数守两道护栏：
-
-    1. **档位区间**：|proposed - current| 必须落在 ``MAGNITUDE_RANGE[magnitude]``
-       内。越界则夹到最近的边界（小于下界→下界，大于上界→上界）。
-    2. **方向**：最终按 ``direction`` 在 current 基础上加/减夹定的变化量
-       （心若给反方向值，direction 为准——方向是硬数据）。
-
-    再叠加 needs/affect 的 0~100 物理边界。返回 int。
-
-    例：current hunger=80，eat 档位 large=[25,40]，心给 proposed=48（变化量 32，
-    在区间内）→ 返 48。心给 proposed=20（变化量 60 越上界）→ 夹到 80-40=40。
-    """
-    lo, hi = MAGNITUDE_RANGE[magnitude]
-    delta = abs(proposed - current)
-    delta = max(lo, min(hi, delta))
-    result = current - delta if direction == "down" else current + delta
-    return max(0, min(100, result))
-
-
 __all__ = [
     "MAGNITUDE_RANGE",
     "MAGNITUDE_REFERENCE",
@@ -403,7 +380,6 @@ __all__ = [
     "ActivityUse",
     "LocationBinding",
     "StateEffect",
-    "clamp_to_magnitude",
     "list_registered_activities",
     "load_activity_skill",
 ]

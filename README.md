@@ -1,16 +1,16 @@
 # Kindred
 
-Kindred is an OpenClaw-native runtime for an autonomous AI resident. It gives the
-resident a persistent inner state, a heartbeat, activities, memory, and explicit
-boundaries for external capabilities.
+Kindred is a runtime for an autonomous AI resident connected to an existing
+Mouth host. It gives the resident a persistent inner state, a heartbeat,
+activities, memory, and explicit boundaries for external capabilities.
 
 The resident is the subject of the system. On each heartbeat, Kindred reads the
 current world and approved conversation, updates a private working state,
 optionally performs one activity step, validates the complete state, and then
-persists the result. OpenClaw provides the conversation surface; portable
-capability packages add optional tools without changing the core graph.
+persists the result. OpenClaw or Hermes provides the conversation surface;
+portable capability packages add optional tools without changing the core graph.
 
-> **Public Preview:** `v0.2.1` supports one resident on one trusted host. It is
+> **Public Preview:** `v0.3.0` supports one resident on one trusted host. It is
 > intended for operators who are comfortable reviewing local configuration and
 > running pre-release software. This preview supports fresh installs only. Use a
 > fresh user/HOME; the installer refuses to overwrite a different preview version.
@@ -19,13 +19,15 @@ capability packages add optional tools without changing the core graph.
 
 ## Requirements
 
-- OpenClaw `2026.6.10` (`aa69b12`), Gateway protocol 4
+- One existing Mouth host:
+  - OpenClaw `2026.6.10` (`aa69b12`) or `2026.7.1-2` (`0790d9f`), protocol 4;
+  - Hermes `v2026.8.18`, package `0.20.4` (experimental).
 - macOS 14 or later on Apple Silicon, or Ubuntu 24.04 on x86_64
-- An existing OpenClaw agent and workspace with Persona files
+- An existing OpenClaw agent/workspace or Hermes home with Persona files
 - Credentials for a supported LLM and the map provider used during home setup
 
 The release bundle includes CPython 3.11, its complete wheelhouse, the read-only
-Web UI, and the Kindred Mouth Plugin. The target host does not need Python, Node,
+Web UI, and both Kindred Mouth Plugins. The target host does not need Python, Node,
 pnpm, a package registry, or `sudo`. Draw is installed but disabled until the
 operator explicitly configures its provider. Private platform integrations are
 not part of the public release.
@@ -37,25 +39,25 @@ interactive installer:
 
 ```sh
 curl -fsSL \
-  https://github.com/skedup/kindred/releases/download/v0.2.1/install.sh \
+  https://github.com/skedup/kindred/releases/download/v0.3.0/install.sh \
   | sh
 ```
 
 To inspect the bootstrap first:
 
 ```sh
-curl -fLO https://github.com/skedup/kindred/releases/download/v0.2.1/install.sh
+curl -fLO https://github.com/skedup/kindred/releases/download/v0.3.0/install.sh
 less install.sh
 sh install.sh
 ```
 
 The bootstrap verifies the selected offline bundle before installing it under
 the current user's data directory. It does not install OpenClaw, modify the
-system Python, parse Persona, collect credentials, or start services. On a TTY it
+system Python, detect a Mouth host, parse Persona, collect credentials, or start services. On a TTY it
 continues into:
 
 ```sh
-kindred openclaw install
+kindred install
 ```
 
 After setup, useful operator commands are:
@@ -73,10 +75,16 @@ The Web UI is a trusted single-user observation surface and listens on loopback
 by default. Remote exposure and authentication are outside Kindred's first
 public preview.
 
-`kindred openclaw uninstall` disconnects Kindred-owned services, binding, and
-the Mouth Plugin. It deliberately preserves the OpenClaw workspace, Persona,
+`kindred uninstall` disconnects Kindred-owned services, binding, and the active
+Mouth Plugin. It deliberately preserves the host workspace/home, Persona,
 resident marker, configuration, database, memory, catalog, artifacts, and tick
 history. There is no purge command.
+
+Hermes support is experimental: it uses an approved direct transcript exported by
+Hermes, injects the Mouth bundle once per approved turn, and publishes companion
+Persona only on first use or content change. Hermes may retain that context in its
+own `api_content` replay. Kindred does not read, replace, or synchronize Hermes
+`MEMORY.md` or `memories/USER.md`. An uncertain `hermes send` result is not retried.
 
 ## Data Boundaries
 
@@ -85,7 +93,7 @@ Functional providers still receive the data required to do their work:
 
 - the configured LLM receives the selected Persona and runtime context;
 - the map provider receives the home address used for world resolution;
-- the local OpenClaw Gateway processes approved transcript history, Mouth
+- the selected local Mouth host processes approved transcript history, Mouth
   context, and outbound dispatch;
 - capabilities explicitly enabled by the operator may call their own providers.
 

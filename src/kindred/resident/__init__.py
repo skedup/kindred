@@ -1,6 +1,7 @@
 """Resident 冷启动领域入口。"""
 
 from kindred.resident._contract import (
+    PersonaPaths,
     PersonaProjection,
     PersonaTraits,
     ResidentInitError,
@@ -16,6 +17,7 @@ from kindred.resident._initialize import (
 
 __all__ = [
     "PersonaProjection",
+    "PersonaPaths",
     "PersonaTraits",
     "ResidentInitError",
     "ResidentInitRequest",

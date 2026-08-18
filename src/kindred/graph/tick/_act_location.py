@@ -61,10 +61,12 @@ LOCATION_KERNEL_TOOL_DEFS: tuple[ToolDef, ...] = (
     ToolDef(
         name=_TOOL_CHOOSE_DESTINATION,
         description=(
-            "Stage a destination choice for the current activity. This only records "
-            "a plan; it does not mean the character has arrived."
+            "Stage a destination plan using only a candidate_ref returned by find_places. "
+            "The Host restores the canonical place identity. Choosing records a cross-tick "
+            "plan and never means the character has arrived."
         ),
         effect="staged_state_event",
+        allow_before_action_lock=True,
         parameters={
             "type": "OBJECT",
             "properties": {"candidate_ref": {"type": "STRING"}},
@@ -74,8 +76,11 @@ LOCATION_KERNEL_TOOL_DEFS: tuple[ToolDef, ...] = (
     ToolDef(
         name=_TOOL_ARRIVE,
         description=(
-            "Stage that the character truly arrived at a planned or chosen place. "
-            "This is the only location-changing place event."
+            "Stage a real arrival at a planned place, or at a same-tick candidate when "
+            "candidate_ref is supplied. This is the only location-changing place event. "
+            "No separate arrival signal will appear: use chosen_at, Host-derived "
+            "en_route_minutes, available distance_km, and the current context without a fixed "
+            "minute threshold. Do not call while still en route."
         ),
         effect="staged_state_event",
         parameters={
@@ -89,7 +94,11 @@ LOCATION_KERNEL_TOOL_DEFS: tuple[ToolDef, ...] = (
     ),
     ToolDef(
         name=_TOOL_ABANDON,
-        description="Stage abandoning an existing destination plan for one binding.",
+        description=(
+            "Stage abandoning an existing destination plan for one binding when the character "
+            "has genuinely stopped going or turned back; keep the final activity description "
+            "consistent with that fact."
+        ),
         effect="staged_state_event",
         parameters={
             "type": "OBJECT",

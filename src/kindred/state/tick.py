@@ -80,17 +80,21 @@ class RecentContactContext(StrictBase):
     available: bool
     recent_exchange_age_seconds: int | None = None
     recent_actor: Literal["partner", "kindred"] | None = None
+    recent_partner_message_age_seconds: int | None = None
 
     @model_validator(mode="after")
     def _check_projection(self) -> RecentContactContext:
         age = self.recent_exchange_age_seconds
         actor = self.recent_actor
-        if not self.available and (age is not None or actor is not None):
+        partner_age = self.recent_partner_message_age_seconds
+        if not self.available and (age is not None or actor is not None or partner_age is not None):
             raise ValueError("unavailable recent contact cannot contain an exchange")
         if (age is None) != (actor is None):
             raise ValueError("recent contact age and actor must appear together")
         if age is not None and age < 0:
             raise ValueError("recent contact age must be non-negative")
+        if partner_age is not None and partner_age < 0:
+            raise ValueError("recent partner message age must be non-negative")
         return self
 
 

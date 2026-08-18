@@ -1,6 +1,6 @@
 {
   "name": "kindred-mouth",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "private": true,
   "scripts": {
@@ -10,10 +10,6 @@
     "extensions": [
       "./index.js"
     ],
-    "compat": {
-      "pluginApi": "2026.6.10",
-      "minGatewayVersion": "2026.6.10"
-    },
     "build": {
       "openclawVersion": "2026.6.10",
       "pluginSdkVersion": "2026.6.10"

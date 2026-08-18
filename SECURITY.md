@@ -2,7 +2,7 @@
 
 ## Supported Version
 
-Security fixes currently target the latest `v0.1.x` public preview only.
+Security fixes currently target the latest `v0.3.x` public preview only.
 
 ## Reporting a Vulnerability
 
@@ -16,5 +16,5 @@ credentials, private keys, or resident data. We may ask for a minimal synthetic
 fixture through the private report.
 
 This project does not operate a hosted service and cannot rotate credentials or
-change an operator's OpenClaw instance. If a credential may be exposed, revoke
+change an operator's OpenClaw or Hermes instance. If a credential may be exposed, revoke
 it with its provider before reporting the software issue.

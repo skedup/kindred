@@ -76,7 +76,7 @@ def initialize_resident(
     config_path, secrets_path = config_dir / "config.yaml", config_dir / "secrets.env"
     marker_path, excerpt_path = (
         request.life_root / ".kindred-resident.json",
-        request.workspace / "SOUL_excerpt.md",
+        request.persona.soul_excerpt,
     )
     committed = _committed(request, config_path, marker_path)
     if committed:
@@ -129,14 +129,16 @@ def initialize_resident(
     return ResidentInitResult("created", install_id)
 
 
-def require_committed_resident(config: KindredConfig) -> None:
+def require_committed_resident(
+    config: KindredConfig,
+    *,
+    validate_secrets: bool = True,
+) -> None:
     """有 OPEN2 resident 身份时，marker 必须存在并与 config 对账。"""
     resident = config.resident
     fields = (
         resident.install_id,
         resident.resident_id,
-        resident.agent_id,
-        resident.workspace,
         resident.marker_path,
         resident.secrets_file,
     )
@@ -164,7 +166,11 @@ def require_committed_resident(config: KindredConfig) -> None:
     except (OSError, ValueError) as exc:
         raise ResidentInitError("resident installation is incomplete") from exc
     try:
-        _composition_preflight_config(config, read_only=True)
+        _composition_preflight_config(
+            config,
+            read_only=True,
+            validate_secrets=validate_secrets,
+        )
     except ResidentInitError:
         raise
     except Exception as exc:
@@ -186,10 +192,12 @@ def _committed(
             marker.get("install_contract_version") == INSTALL_CONTRACT_VERSION,
             config.resident.install_id == marker.get("install_id"),
             config.resident.resident_id == request.resident_id,
-            config.resident.agent_id == request.agent_id,
-            config.resident.workspace == request.workspace,
             config.resident.marker_path == marker_path,
             config.paths.life_root == request.life_root,
+            config.paths.soul_full == request.persona.soul_full,
+            config.paths.identity == request.persona.identity,
+            config.paths.user == request.persona.user,
+            config.paths.soul_excerpt == request.persona.soul_excerpt,
         )
         if not all(expected):
             raise ValueError
@@ -206,7 +214,7 @@ def _preflight(
         raise ResidentInitError("Persona read and Dream write consent is required")
     if request.install_now.tzinfo is None:
         raise ResidentInitError("install_now must be timezone-aware")
-    for field in ("resident_id", "agent_id", "home_address", "llm_model"):
+    for field in ("resident_id", "home_address", "llm_model"):
         value = getattr(request, field)
         if not isinstance(value, str) or not value.strip():
             raise ResidentInitError(f"{field} must not be empty")
@@ -223,17 +231,17 @@ def _preflight(
     if existing:
         raise ResidentInitError(f"incomplete resident installation exists: {','.join(existing)}")
     try:
-        workspace = request.workspace.resolve(strict=True)
+        soul_root = request.persona.soul_full.parent.resolve(strict=True)
     except OSError as exc:
-        raise ResidentInitError("workspace is unavailable") from exc
+        raise ResidentInitError("Persona root is unavailable") from exc
     if (
-        workspace != request.workspace
-        or not workspace.is_dir()
-        or not os.access(workspace, os.W_OK)
+        soul_root != request.persona.soul_full.parent
+        or not soul_root.is_dir()
+        or not os.access(soul_root, os.W_OK)
     ):
-        raise ResidentInitError("workspace must be canonical and writable")
-    soul = read_owned_persona_file(workspace / "SOUL.md", name="SOUL.md")
-    identity = read_owned_persona_file(workspace / "IDENTITY.md", name="IDENTITY.md")
+        raise ResidentInitError("Persona root must be canonical and writable")
+    soul = read_owned_persona_file(request.persona.soul_full, name="SOUL.md")
+    identity = read_owned_persona_file(request.persona.identity, name="IDENTITY.md")
     assert soul is not None and identity is not None
     return soul, identity
 
@@ -250,6 +258,7 @@ def _secrets(request: ResidentInitRequest) -> dict[str, str]:
         "deepseek": ("DEEPSEEK_API_KEY",),
         "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
         "openai": ("OPENAI_API_KEY",),
+        "xai": ("XAI_API_KEY",),
     }.get(request.llm_provider)
     if required and not any(key in result for key in required):
         raise ResidentInitError(f"missing credential for provider: {request.llm_provider}")
@@ -263,14 +272,14 @@ def _config(
     marker: Path,
     secrets: Path,
 ) -> str:
-    life, workspace = request.life_root, request.workspace
+    life, persona = request.life_root, request.persona
     raw = {
         "paths": {
             "life_root": str(life),
-            "soul_excerpt": str(workspace / "SOUL_excerpt.md"),
-            "soul_full": str(workspace / "SOUL.md"),
-            "identity": str(workspace / "IDENTITY.md"),
-            "user": str(workspace / "USER.md"),
+            "soul_excerpt": str(persona.soul_excerpt),
+            "soul_full": str(persona.soul_full),
+            "identity": str(persona.identity),
+            "user": str(persona.user),
             "character_card": str(life / "character-card.yaml"),
         },
         "llm": {
@@ -286,8 +295,6 @@ def _config(
         "resident": {
             "install_id": install_id,
             "resident_id": request.resident_id,
-            "agent_id": request.agent_id,
-            "workspace": str(workspace),
             "marker_path": str(marker),
             "secrets_file": str(secrets),
         },
@@ -303,16 +310,18 @@ def _composition_preflight_config(
     config: KindredConfig,
     *,
     read_only: bool = False,
+    validate_secrets: bool = True,
 ) -> None:
     load_card_manifest(config.paths.character_card)
     load_interior_trait_profile(config.paths.character_card)
     secret = config.resident.secrets_file
     if secret is None:
         raise ResidentInitError("resident secrets_file is missing or too permissive")
-    try:
-        read_secrets_file(secret)
-    except KindredSecretError as exc:
-        raise ResidentInitError(str(exc)) from exc
+    if validate_secrets:
+        try:
+            read_secrets_file(secret)
+        except KindredSecretError as exc:
+            raise ResidentInitError(str(exc)) from exc
     opener = KindredDB.open_readonly if read_only else KindredDB.open
     with opener(config.paths.db) as db:
         latest = db.get_state_latest()

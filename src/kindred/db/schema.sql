@@ -1,4 +1,5 @@
--- Kindred SQLite schema v6
+-- Kindred SQLite schema v7
+-- v7（Desktop Spirit V1）：state_latest 改按 monotonic tick.id 取最新提交
 -- v6（Relationship REL1-A）：+ relationship_profile 当前关系权威表
 -- v5（Artifact Visibility ART1A）：+ artifact_commit committed descriptor 读模型
 -- v4（Inventory I0）：+ inventory_items 运行期私有物品名册
@@ -68,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_tick_activity_name
 
 DROP VIEW IF EXISTS state_latest;
 CREATE VIEW state_latest AS
-    SELECT * FROM tick ORDER BY ts DESC LIMIT 1;
+    SELECT * FROM tick ORDER BY id DESC LIMIT 1;
 
 -- ─── episode 视图（significance>=7 高光闪回，09 Layer C） ──────────
 

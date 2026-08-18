@@ -1,7 +1,7 @@
 """``EnvironmentProvider`` —— 天气（世界 Provider 层第一块砖 + 丰富化）。
 
 参考：``docs/02-state-system.md`` §3.4 / ``docs/10-providers.md`` /
-``docs/discussions/2026-06-29-breathable-world-event-provider.md`` §7。
+``docs/archive/discussions/2026-06/2026-06-29-breathable-world-event-provider.md`` §7。
 
 设计要点
 ========

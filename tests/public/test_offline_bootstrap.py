@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 
 def _command(path: Path, name: str, body: str) -> None:
@@ -101,7 +101,6 @@ def _run(
     commands.mkdir(exist_ok=True)
     if not (server / "manifest.json").exists():
         _bundle(server, platform, traversal=traversal)
-    _command(commands, "openclaw", "printf 'OpenClaw 2026.6.10 (aa69b12)\\n'\n")
     if platform == "macos-arm64":
         _command(commands, "uname", '[ "$1" = -s ] && echo Darwin || echo arm64\n')
         _command(commands, "sw_vers", "echo 14.6.1\n")
@@ -178,6 +177,14 @@ def test_bootstrap_uses_public_manifest_as_the_only_install_authority() -> None:
     assert 'selected = manifest["platforms"][platform]' in source
 
 
+def test_bootstrap_is_host_neutral_and_defers_discovery_to_python_installer() -> None:
+    source = (Path(__file__).resolve().parents[2] / "scripts/install.sh").read_text()
+
+    assert "openclaw --version" not in source
+    assert "hermes --version" not in source
+    assert 'exec "$BIN_DIR/kindred" install' in source
+
+
 def test_hash_mismatch_and_archive_traversal_fail_closed(tmp_path: Path) -> None:
     traversal = _run(tmp_path / "traversal", "macos-arm64", traversal=True)
     assert traversal.returncode == 2
@@ -194,7 +201,6 @@ def test_hash_mismatch_and_archive_traversal_fail_closed(tmp_path: Path) -> None
     _bundle(server, "macos-arm64")
     bundle = server / f"kindred-v{VERSION}-macos-arm64.tar.gz"
     bundle.write_bytes(bundle.read_bytes() + b"changed")
-    _command(commands, "openclaw", "printf 'OpenClaw 2026.6.10 (aa69b12)\\n'\n")
     _command(commands, "uname", '[ "$1" = -s ] && echo Darwin || echo arm64\n')
     _command(commands, "sw_vers", "echo 14.6.1\n")
     result = subprocess.run(

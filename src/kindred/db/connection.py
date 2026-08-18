@@ -24,7 +24,7 @@ _LOG = logging.getLogger(__name__)
 
 # schema.sql 与 connection.py 同目录
 _SCHEMA_PATH: Final[Path] = Path(__file__).parent / "schema.sql"
-_CURRENT_SCHEMA_VERSION: Final[int] = 6
+CURRENT_SCHEMA_VERSION: Final[int] = 7
 """当前 schema 版本。
 
 Version History
@@ -43,6 +43,9 @@ Version History
   首次升级从合法 canonical tick 一次性回填，之后由 T3 同事务副写。
 * **v6**（2026-08，Relationship REL1-A）：+ relationship_profile 当前关系权威表。
   纯加表，不回放或修改既有 tick / state_latest。
+* **v7**（2026-08，Desktop Spirit V1）：``state_latest`` 改按 ``tick.id DESC``
+  选择最新提交，消除秒级时间戳相同导致 Heart 读到旧状态的歧义。迁移仅幂等重建
+  view，不回放或修改既有 tick。
 
 Phase β 加 ALTER 类迁移时，需配合 connection.migrate() 重构为
 逐语句 execute（详见 migrate docstring "事务语义限制" 节）。
@@ -99,7 +102,9 @@ def connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     # mode=ro：只读打开；文件不存在直接报错（不像 connect 会 mkdir + 建库）。
     uri = f"file:{path}?mode=ro"
-    _LOG.debug("db.connect_readonly path=%s", path)
+    # Read-only observation can be exposed remotely; do not put resident paths
+    # into request-adjacent DEBUG logs.
+    _LOG.debug("db.connect_readonly")
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
@@ -142,10 +147,10 @@ def migrate(conn: sqlite3.Connection) -> int:
         now_iso = datetime.now(tz=timezone.utc).isoformat()
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
-            (_CURRENT_SCHEMA_VERSION, now_iso),
+            (CURRENT_SCHEMA_VERSION, now_iso),
         )
-    _LOG.debug("db.migrate schema_version=%d", _CURRENT_SCHEMA_VERSION)
-    return _CURRENT_SCHEMA_VERSION
+    _LOG.debug("db.migrate schema_version=%d", CURRENT_SCHEMA_VERSION)
+    return CURRENT_SCHEMA_VERSION
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int | None:

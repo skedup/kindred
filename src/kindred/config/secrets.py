@@ -17,6 +17,7 @@ SUPPORTED_SECRET_KEYS = frozenset(
         "GOOGLE_API_KEY",
         "KINDRED_GATEWAY_TOKEN",
         "OPENAI_API_KEY",
+        "XAI_API_KEY",
     }
 )
 

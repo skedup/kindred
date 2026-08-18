@@ -23,11 +23,18 @@ from kindred.adapters.openclaw.gateway import GatewayClient, _RetryableError
 from kindred.cli import cli
 from kindred.config import load_kindred_config
 from kindred.db import KindredDB
+from kindred.mouth_host.composition import OpenClawRuntimeModel, prepare_host
+from kindred.mouth_host.runtime import (
+    DispatchResult,
+    TranscriptBatch,
+    TranscriptMessage,
+)
 from kindred.openclaw import MOUTH_PLUGIN_DIR, OpenClawWire
 from kindred.openclaw.binding import binding_payload, require_openclaw_binding
 from kindred.openclaw.install import _publish_wire
 from kindred.relationship.models import RelationshipProfile
 from kindred.resident import (
+    PersonaPaths,
     PersonaProjection,
     PersonaTraits,
     ResidentInitRequest,
@@ -50,6 +57,15 @@ class _Gateway:
     )
     direct_calls: list[dict[str, Any]] = field(default_factory=list)
     context_calls: list[tuple[str, str]] = field(default_factory=list)
+
+    def fetch_chat_history(self, session_key: str, *, limit: int) -> dict[str, object]:
+        assert (session_key, limit) == (_SESSION, 30)
+        return {
+            "ok": True,
+            "sessionKey": _SESSION,
+            "sessionInfoKey": _SESSION,
+            "messages": [],
+        }
 
     def send_direct(self, **kwargs: Any) -> object:
         self.direct_calls.append(kwargs)
@@ -214,10 +230,59 @@ def test_history_sync_rejects_canonical_drift_before_message_upsert(tmp_path: Pa
         ]
 
 
+def test_runtime_orchestrators_accept_host_neutral_ports(tmp_path: Path) -> None:
+    class Source:
+        def pull(self) -> TranscriptBatch:
+            return TranscriptBatch(
+                identity="opaque-transcript",
+                messages=(
+                    TranscriptMessage(
+                        msg_id="m1",
+                        seq=1,
+                        role="partner",
+                        text_summary="synthetic",
+                        ts_ms=1,
+                    ),
+                ),
+            )
+
+    class Channel:
+        def send(self, text: str, *, artifact_ref: str) -> DispatchResult:
+            assert (text, artifact_ref) == ("synthetic", _ARTIFACT)
+            return DispatchResult(status="accepted")
+
+    with KindredDB.open(tmp_path / "kindred.db") as db:
+        assert HistorySync(Source(), db).sync_once() == 1
+        assert [
+            row.msg_id for row in db.get_recent_messages(session_key="opaque-transcript", limit=10)
+        ] == ["m1"]
+    IOBridge(Channel()).send_to_user("synthetic", artifact_ref=_ARTIFACT)
+
+
+def test_internal_openclaw_composition_preserves_workspace_layout(tmp_path: Path) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+    workspace.mkdir()
+    for name in ("SOUL.md", "IDENTITY.md", "SOUL_excerpt.md"):
+        (workspace / name).write_text(name, encoding="utf-8")
+    gateway = _Gateway()
+    prepared = prepare_host(
+        OpenClawRuntimeModel(
+            kind="openclaw", wire=_wire(), agent_id="resident", workspace=workspace
+        ),
+        openclaw_gateway=gateway,  # type: ignore[arg-type]
+    )
+
+    assert [check["status"] for check in prepared.checks(online=True)] == ["ok", "ok"]
+
+    assert prepared.persona.soul_full == workspace / "SOUL.md"
+    assert prepared.persona.soul_excerpt == workspace / "SOUL_excerpt.md"
+    assert [check["status"] for check in prepared.checks()] == ["ok"]
+
+
 def test_binding_v3_and_wire_publication_share_the_canonical_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from kindred.cli import _require_openclaw_runtime as require_cli_runtime
+    from kindred.cli import _require_mouth_host_runtime as require_cli_runtime
     from kindred.openclaw import install as installer
 
     home = tmp_path / "home"
@@ -232,13 +297,16 @@ def test_binding_v3_and_wire_publication_share_the_canonical_session(
         config,
         paths=replace(config.paths, context_bundle=bundle),
         daemon=replace(config.daemon, session_key=_SESSION),
-        openclaw=_wire(),
+        mouth_host=OpenClawRuntimeModel(
+            kind="openclaw",
+            wire=_wire(),
+            agent_id="resident",
+            workspace=workspace,
+        ),
         resident=replace(
             config.resident,
             install_id="install-a",
             resident_id="resident",
-            agent_id="resident",
-            workspace=workspace,
             marker_path=marker,
         ),
     )
@@ -261,7 +329,12 @@ def test_binding_v3_and_wire_publication_share_the_canonical_session(
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text("daemon:\n  session_key: old\ngateway:\n  port: 1\n", encoding="utf-8")
-    _publish_wire(config_path, _wire(), 18789)
+    _publish_wire(
+        config_path,
+        _wire(),
+        18789,
+        agent=installer._Agent("resident", workspace, "Resident"),
+    )
     published = config_path.read_text(encoding="utf-8")
     assert published.count(_SESSION) == 2
     assert "port: 18789" in published
@@ -288,8 +361,7 @@ def test_launchagent_run_uses_local_identity_without_openclaw_cli(
     initialize_resident(
         ResidentInitRequest(
             resident_id="resident",
-            agent_id="resident",
-            workspace=workspace.resolve(),
+            persona=PersonaPaths.openclaw(workspace.resolve()),
             life_root=(tmp_path / "life").resolve(),
             xdg_config_home=xdg.resolve(),
             home_address="synthetic address",
@@ -321,9 +393,23 @@ def test_launchagent_run_uses_local_identity_without_openclaw_cli(
     )
     config_path = xdg / "kindred/config.yaml"
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    raw["openclaw"] = _wire().model_dump(mode="json")
+    expected_persona_paths = {
+        "life_root": str((tmp_path / "life").resolve()),
+        "soul_excerpt": str(workspace / "SOUL_excerpt.md"),
+        "soul_full": str(workspace / "SOUL.md"),
+        "identity": str(workspace / "IDENTITY.md"),
+        "user": str(workspace / "USER.md"),
+    }
+    assert {key: raw["paths"][key] for key in expected_persona_paths} == expected_persona_paths
+    raw["mouth_host"] = {
+        "kind": "openclaw",
+        "wire": _wire().model_dump(mode="json"),
+        "agent_id": "resident",
+        "workspace": str(workspace.resolve()),
+    }
     raw.setdefault("daemon", {})["session_key"] = _SESSION
     config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    monkeypatch.setenv("KINDRED_CONFIG", str(config_path))
     config = load_kindred_config(config_path)
     with KindredDB.open(config.paths.db) as db, db.transaction():
         db.create_relationship(
@@ -341,116 +427,96 @@ def test_launchagent_run_uses_local_identity_without_openclaw_cli(
     binding.write_text(json.dumps(binding_payload(config)), encoding="utf-8")
     binding.chmod(0o600)
     events: list[str] = []
+    doctor_paths: list[Path | None] = []
     monkeypatch.setattr(cli_module, "_configure_observability", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli_module, "_require_mouth_host_runtime", lambda _config: None)
+    monkeypatch.setattr(cli_module, "_doctor_preflight", lambda path: doctor_paths.append(path))
     monkeypatch.setattr(
         "kindred.runtime.daemon.run_daemon",
-        lambda loaded, *_args, **_kwargs: events.append(loaded.openclaw.transcript_session) or 0,
+        lambda loaded, *_args, **_kwargs: (
+            events.append(loaded.mouth_host.wire.transcript_session) or 0
+        ),
     )
 
-    result = CliRunner().invoke(cli, ["run", "--config", str(config_path)])
+    result = CliRunner().invoke(cli, ["run"])
 
     assert result.exit_code == 0, result.output
     assert events == [_SESSION]
+    assert doctor_paths == [config_path]
 
 
-def test_installer_orders_relationship_wire_doctor_and_service(
+def test_unified_installer_dispatches_host_before_shared_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from kindred.openclaw import install as installer
+    from kindred.mouth_host import install as installer
 
-    home = tmp_path / "home"
-    workspace = tmp_path / "workspace"
-    life_root = tmp_path / "life"
-    workspace.mkdir()
-    life_root.mkdir()
-    marker = life_root / "resident.json"
-    marker.write_text(json.dumps({"install_id": "install-a"}), encoding="utf-8")
-    config = load_kindred_config(env={})
-    config = replace(
-        config,
-        paths=replace(config.paths, life_root=life_root),
-        daemon=replace(config.daemon, session_key=_SESSION),
-        openclaw=_wire(),
-        resident=replace(
-            config.resident,
-            install_id="install-a",
-            resident_id="resident",
-            agent_id="resident",
-            workspace=workspace,
-            marker_path=marker,
-        ),
-    )
-    agent = installer._Agent("resident", workspace, "Resident")
-    discovered = installer._DiscoveredWire(_wire())
     events: list[str] = []
-
-    def mark(name: str, value: object = None) -> object:
-        events.append(name)
-        return value
-
-    monkeypatch.setenv("HOME", str(home))
+    config_path = tmp_path / "config.yaml"
     monkeypatch.setattr(installer.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(installer, "_confirm_data_flows", lambda: mark("data_flows"))
-    monkeypatch.setattr(installer, "_require_version", lambda: mark("version"))
-    monkeypatch.setattr(installer, "_agents", lambda: [agent])
-    monkeypatch.setattr(installer, "_select_agent", lambda _agents: agent)
-    monkeypatch.setattr(installer, "_ensure_resident", lambda *_args: config)
-    monkeypatch.setattr(installer, "install_runtime_secrets", lambda *_args: None)
-    monkeypatch.setattr(installer, "load_kindred_config", lambda *_args, **_kwargs: config)
-    monkeypatch.setattr(installer, "_json", lambda *_args, **_kwargs: 18789)
+    monkeypatch.setattr(installer, "_discover_hosts", lambda: (("openclaw", None),))
+    monkeypatch.setattr(installer, "_select_host", lambda hosts: hosts[0])
     monkeypatch.setattr(
-        installer.GatewayClient,
-        "from_config",
-        classmethod(lambda _cls, *_args, **_kwargs: object()),
+        installer,
+        "_confirm_data_flows",
+        lambda kind: events.append(f"flow:{kind}"),
     )
-    monkeypatch.setattr(installer, "_discover_wire", lambda *_args: discovered)
-    monkeypatch.setattr(installer, "_binding_generation", lambda _config: "none")
-    monkeypatch.setattr(installer, "_confirm_rebind", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(installer, "_ensure_relationship", lambda *_args: mark("relationship"))
-    monkeypatch.setattr(installer, "_configure_agent_verbose_off", lambda *_args: None)
-    monkeypatch.setattr(installer, "_plugin", lambda *_args: mark("plugin"))
-    monkeypatch.setattr(installer, "_publish_wire", lambda *_args: mark("wire"))
-    monkeypatch.setattr(installer, "require_committed_resident", lambda *_args: None)
-    monkeypatch.setattr(installer, "binding_payload", lambda _config: {"schema_version": 3})
-    monkeypatch.setattr(installer, "require_openclaw_binding", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(installer, "require_openclaw_runtime", lambda *_args: mark("runtime"))
+    monkeypatch.setattr(installer, "_config_path", lambda: config_path)
+    monkeypatch.setattr(
+        installer.openclaw,
+        "install_openclaw",
+        lambda _path: events.append("host"),
+    )
     monkeypatch.setattr(
         "kindred.openclaw.doctor.require_doctor_ready",
-        lambda *_args, **_kwargs: mark("doctor"),
+        lambda _path: events.append("doctor"),
     )
     monkeypatch.setattr(
-        installer.platform_service,
-        "install_services",
-        lambda *_args, **_kwargs: mark("service"),
+        installer,
+        "_install_platform_services",
+        lambda _path: events.append("service"),
     )
-    monkeypatch.setattr(installer.click, "confirm", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(installer.click, "echo", lambda *_args, **_kwargs: None)
 
-    assert installer.openclaw_install.callback is not None
-    installer.openclaw_install.callback()
+    assert installer.install.callback is not None
+    installer.install.callback()
 
-    assert events == [
-        "data_flows",
-        "version",
-        "relationship",
-        "plugin",
-        "wire",
-        "runtime",
-        "doctor",
-        "service",
+    assert events == ["flow:openclaw", "host", "doctor", "service"]
+
+
+def test_openclaw_profiles_are_verified_and_unknown_identity_only_warns() -> None:
+    from kindred.openclaw import install as installer
+    from kindred.openclaw.install_plugin import OpenClawIdentity
+
+    assert [(item.version, item.build, item.protocol) for item in installer.OPENCLAW_PROFILES] == [
+        ("2026.6.10", "aa69b12", 4),
+        ("2026.7.1-2", "0790d9f", 4),
     ]
-    assert (home / ".config/kindred/openclaw-binding.json").is_file()
+    assert all(
+        installer._version_warning(
+            OpenClawIdentity(version=profile.version, build=profile.build, profile=profile)
+        )
+        is None
+        for profile in installer.OPENCLAW_PROFILES
+    )
+    warning = installer._version_warning(
+        OpenClawIdentity(version="2027.1.0", build="future", profile=None)
+    )
+    assert warning is not None and "完整合同检查" in warning
 
 
 def test_daemon_builds_history_and_outbound_from_the_same_verified_wire(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = load_kindred_config(env={})
+    model = OpenClawRuntimeModel(
+        kind="openclaw",
+        wire=_wire(),
+        agent_id="resident",
+        workspace=tmp_path / "workspace",
+    )
     config = replace(
         config,
         paths=replace(config.paths, life_root=tmp_path),
-        openclaw=_wire(),
-        resident=replace(config.resident, agent_id="resident"),
+        mouth_host=model,
     )
     gateway = object()
     monkeypatch.setattr(
@@ -464,11 +530,11 @@ def test_daemon_builds_history_and_outbound_from_the_same_verified_wire(
         history = daemon._build_history_sync(db)
         outbound = daemon._build_io_bridge()
 
-    assert history is not None and history._client is gateway
-    assert history._wire is config.openclaw
-    assert outbound is not None and outbound._gateway is gateway
-    assert outbound._wire is config.openclaw
-    assert outbound._agent_id == "resident"
+    assert history is not None and history._source._client is gateway
+    assert history._source._wire is model.wire
+    assert outbound is not None and outbound._channel._gateway is gateway
+    assert outbound._channel._wire is model.wire
+    assert outbound._channel._agent_id == "resident"
 
 
 def test_packaged_mouth_plugin_executes_exact_entry_and_outbound_contract(
@@ -476,8 +542,8 @@ def test_packaged_mouth_plugin_executes_exact_entry_and_outbound_contract(
 ) -> None:
     package = json.loads((MOUTH_PLUGIN_DIR / "package.json").read_text(encoding="utf-8"))
 
-    assert package["version"] == "0.3.0"
-    assert package["openclaw"]["compat"]["pluginApi"] == "2026.6.10"
+    assert package["version"] == "0.4.0"
+    assert "compat" not in package["openclaw"]
     for relative in (
         "binding.js",
         "index.js",

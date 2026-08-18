@@ -1,7 +1,7 @@
 """``LocationProvider`` —— 地点 affordance 的世界事实源。
 
-参考：``docs/discussions/2026-07-01-location-provider-contract.md`` /
-``docs/discussions/2026-07-01-location-query-candidate-contract.md``。
+参考：``docs/archive/discussions/2026-07/2026-07-01-location-provider-contract.md`` /
+``docs/archive/discussions/2026-07/2026-07-01-location-query-candidate-contract.md``。
 
 设计要点
 ========
