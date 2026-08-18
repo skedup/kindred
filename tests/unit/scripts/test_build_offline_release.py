@@ -55,7 +55,7 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
     root = Path(__file__).resolve().parents[3]
     inputs = json.loads((root / "distribution/release-inputs.json").read_text())
 
-    assert inputs["release_version"] == "0.3.0"
+    assert inputs["release_version"] == "0.3.1"
     assert set(inputs["mouth_hosts"]) == {"openclaw", "hermes"}
     assert len(inputs["mouth_hosts"]["openclaw"]["profiles"]) == 2
     assert inputs["mouth_hosts"]["hermes"]["maturity"] == "experimental"

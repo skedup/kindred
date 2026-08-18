@@ -7,7 +7,7 @@ Kindred 是一个连接既有 Mouth host 的自主 AI resident 运行时。它�
 中更新感知，可选择执行一个活动步骤，校验完整状态后再持久化。OpenClaw 或 Hermes 提供对话界面；
 Portable Capability package 可以在不修改核心 graph 的情况下增加外部工具。
 
-> **Public Preview：**`v0.3.0` 面向一台可信主机上的单 resident，适合愿意检查本地配置并
+> **Public Preview：**`v0.3.1` 面向一台可信主机上的单 resident，适合愿意检查本地配置并
 > 体验预发布软件的 operator。当前预览只支持全新安装，请使用全新用户/HOME；installer 会拒绝
 > 覆盖其他预览版本。
 
@@ -32,14 +32,14 @@ Portable Capability package 可以在不修改核心 graph 的情况下增加外
 
 ```sh
 curl -fsSL \
-  https://github.com/skedup/kindred/releases/download/v0.3.0/install.sh \
+  https://github.com/skedup/kindred/releases/download/v0.3.1/install.sh \
   | sh
 ```
 
 也可以先检查脚本：
 
 ```sh
-curl -fLO https://github.com/skedup/kindred/releases/download/v0.3.0/install.sh
+curl -fLO https://github.com/skedup/kindred/releases/download/v0.3.1/install.sh
 less install.sh
 sh install.sh
 ```

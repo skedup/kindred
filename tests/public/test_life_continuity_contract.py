@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from kindred.activity.skill import load_activity_skill
@@ -14,6 +14,8 @@ from kindred.graph.tick.sense_llm import (
 )
 from kindred.life_assets import ACTIVITIES_DIR
 from kindred.llm.mock import MockLlmClient
+from kindred.resident import WorldResolution
+from kindred.resident._seed import build_initial_state
 from kindred.state._derive import (
     ComfortInputs,
     apply_cascade_thresholds,
@@ -22,6 +24,18 @@ from kindred.state._derive import (
 )
 from kindred.state._seed import make_doc_example_state
 from kindred.state.interior import Interior
+
+
+def test_fresh_resident_wakes_after_a_completed_rest() -> None:
+    state = build_initial_state(
+        datetime(2026, 8, 18, tzinfo=timezone.utc),
+        WorldResolution(address="synthetic home", city="test city", timezone="UTC"),
+        eros=50,
+    )
+
+    assert state.activity.name == "rest"
+    assert state.activity.desc == "刚在家中醒来"
+    assert state.activity.step == "settle"
 
 
 def test_settled_activity_leaves_prompt_after_three_quiet_ticks() -> None:

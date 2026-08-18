@@ -48,6 +48,7 @@ def build_initial_state(now: datetime, world: WorldResolution, eros: int) -> Sta
             "engagement": 0.0,
             "with_whom": [],
             "for_what": "开始新的生活",
+            "step": "settle",
         },
         "location": {
             "name": "家",
