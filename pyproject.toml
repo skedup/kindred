@@ -70,6 +70,7 @@ dev = [
   "pytest-cov>=4.0",
   "ruff>=0.6",
   "mypy>=1.0",
+  "jsonschema>=4.23",    # canonical HTTP contract fixtures / response validation
   "types-PyYAML",        # mypy stub for pyyaml
   "fastapi>=0.110",      # web 层测试（TestClient）+ mypy 检 src/kindred/web
   "uvicorn>=0.27",       # serve 命令
@@ -142,6 +143,7 @@ target-version = "py310"
 src = [
   "src",
   "tests",
+  "tools",
   "packages/kindred-capability-sdk/src",
   "packages/kindred-capability-draw/src",
   "packages/kindred-capability-compose/src",

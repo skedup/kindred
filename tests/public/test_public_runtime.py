@@ -255,6 +255,56 @@ def test_public_visual_state_foundation_is_stable_and_action_only() -> None:
     assert install_id not in snapshot.source_id
 
 
+def test_public_visual_state_v1_is_the_only_published_version_surface(tmp_path: Path) -> None:
+    config = dataclasses.replace(
+        DEFAULT_CONFIG,
+        resident=dataclasses.replace(
+            DEFAULT_CONFIG.resident,
+            install_id="synthetic-public-install",
+        ),
+    )
+    client = TestClient(create_app(config=config, db_path=tmp_path / "missing.db"))
+
+    openapi = client.get("/openapi.json").json()
+    visual_paths = sorted(path for path in openapi["paths"] if "visual-state" in path)
+    component_schemas = openapi["components"]["schemas"]
+    response_schema = openapi["paths"]["/api/visual-state"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+
+    assert visual_paths == ["/api/visual-state"]
+    assert response_schema["oneOf"] == [
+        {"$ref": "#/components/schemas/VisualStateEmptyV1"},
+        {"$ref": "#/components/schemas/VisualStateReadyV1"},
+    ]
+    assert response_schema["discriminator"] == {
+        "propertyName": "status",
+        "mapping": {
+            "empty": "#/components/schemas/VisualStateEmptyV1",
+            "ready": "#/components/schemas/VisualStateReadyV1",
+        },
+    }
+    assert set(component_schemas["VisualStateEmptyV1"]["properties"]) == {
+        "schema_version",
+        "source_id",
+        "status",
+    }
+    assert set(component_schemas["VisualStateReadyV1"]["properties"]) == {
+        "schema_version",
+        "source_id",
+        "status",
+        "revision",
+        "committed_at",
+        "motion_instance_id",
+        "action",
+    }
+    assert set(component_schemas["VisualActionV1"]["properties"]) == {"name"}
+    assert all(
+        component_schemas[name]["additionalProperties"] is False
+        for name in ("VisualStateEmptyV1", "VisualStateReadyV1", "VisualActionV1")
+    )
+
+
 def test_public_visual_state_http_contract_fails_closed_on_incomplete_schema(
     tmp_path: Path,
 ) -> None:

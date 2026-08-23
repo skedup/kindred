@@ -114,6 +114,8 @@ The Web UI lives in `web/` and is read-only. Public life assets are packaged
 under `kindred.life_assets`; external capabilities use the
 `kindred.capability.v1` entry point. Release Web assets are built with Node
 `22.18.0`, pnpm `11.7.0`, and the committed lockfile before building the wheel.
+The macOS desktop spirit is developed and released independently in
+[skedup/kindred-desktop](https://github.com/skedup/kindred-desktop).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report
 security issues privately as described in [SECURITY.md](SECURITY.md).

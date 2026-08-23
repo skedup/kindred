@@ -28,6 +28,7 @@
     "contracts/visual-state/v1.schema.sha256",
     "distribution/public-allowlist.json",
     "distribution/release-inputs.json",
+    "docs/19-desktop-spirit.md",
     "hatch_build.py",
     "packages/kindred-capability-compose/LICENSE",
     "packages/kindred-capability-compose/README.md",
