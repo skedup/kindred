@@ -1,0 +1,42 @@
+name: VisualState contract CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/visual-state-contract.yml"
+      - "contracts/visual-state/**"
+      - "tests/public/test_visual_state_schema.py"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/visual-state-contract.yml"
+      - "contracts/visual-state/**"
+      - "tests/public/test_visual_state_schema.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-state-contract-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Required checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.15"
+      - name: Install contract validator
+        run: python -m pip install --disable-pip-version-check "jsonschema==4.26.0"
+      - name: Validate VisualStateV1 contract capsule
+        run: python tests/public/test_visual_state_schema.py

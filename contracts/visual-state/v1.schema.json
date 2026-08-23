@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kindred VisualStateV1",
+  "description": "Canonical action-only snapshot returned by GET /api/visual-state.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/empty"
+    },
+    {
+      "$ref": "#/$defs/ready"
+    }
+  ],
+  "$defs": {
+    "sourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?![^\\u0000-\\u001F\\u007F]*[\\u0000-\\u001F\\u007F])"
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]{0,63}(?![\\s\\S])"
+        }
+      }
+    },
+    "empty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source_id",
+        "status"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "source_id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "status": {
+          "const": "empty"
+        }
+      }
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source_id",
+        "status",
+        "revision",
+        "committed_at",
+        "motion_instance_id",
+        "action"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "source_id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "status": {
+          "const": "ready"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "committed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?![^\\u0000-\\u001F\\u007F]*[\\u0000-\\u001F\\u007F])"
+        },
+        "motion_instance_id": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^tick:[1-9][0-9]*(?![\\s\\S])"
+        },
+        "action": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/action"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
