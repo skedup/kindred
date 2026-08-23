@@ -19,10 +19,6 @@ node_modules/
 # OS
 .DS_Store
 
-# Desktop implementation moved to github.com/skedup/kindred-desktop. Keep any
-# local legacy experiments/build caches out of the Kindred repository.
-/desktop/
-/web/src-tauri/
 Thumbs.db
 
 # Editor
