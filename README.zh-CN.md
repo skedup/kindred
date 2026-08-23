@@ -98,7 +98,9 @@ uv build
 
 只读 Web UI 位于 `web/`。公共生活资产打包在 `kindred.life_assets`，外部能力使用
 `kindred.capability.v1` entry point。提交 Pull Request 前请阅读
-[CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+[CONTRIBUTING.md](CONTRIBUTING.md)；macOS 桌面精灵由独立仓库
+[skedup/kindred-desktop](https://github.com/skedup/kindred-desktop) 开发和发布；安全问题请按
+[SECURITY.md](SECURITY.md) 私下报告。
 
 ## 许可证
 

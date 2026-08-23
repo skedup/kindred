@@ -3,29 +3,6 @@
 // 后端用 pydantic 强类型吐 JSON，前端这里镜像同一形状。任何一边改契约，
 // 两边都要同步改（与后端 typed-helper 铁律同源：契约是前后端的唯一真相）。
 
-export interface VisualActionV1 {
-  name: string
-}
-
-export interface VisualStateEmptyV1 {
-  schema_version: 1
-  source_id: string
-  status: 'empty'
-}
-
-export interface VisualStateReadyV1 {
-  schema_version: 1
-  source_id: string
-  status: 'ready'
-  revision: number
-  committed_at: string
-  motion_instance_id: `tick:${number}`
-  action: VisualActionV1 | null
-}
-
-/** Desktop-only action snapshot contract; the browser UI does not consume this endpoint. */
-export type VisualStateV1 = VisualStateEmptyV1 | VisualStateReadyV1
-
 /** 带描述的 0-100 表盘（body / mood / inner_pulse）。 */
 export interface Gauge {
   value: number

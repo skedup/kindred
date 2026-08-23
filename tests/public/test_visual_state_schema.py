@@ -14,6 +14,9 @@ SCHEMA_PATH = CONTRACT_ROOT / "v1.schema.json"
 DIGEST_PATH = CONTRACT_ROOT / "v1.schema.sha256"
 FIXTURES_ROOT = CONTRACT_ROOT / "fixtures"
 
+FROZEN_V1_SCHEMA_SHA256 = "4a156e48f7249357e4ad10c02591626c9516bd67a147c58d2a5c2b54f8279db2"
+FROZEN_V1_DIRECTORY_SHA256 = "da6995648bcd91e4e6f41211c58d102f0d9afb68bcfd7f9131604143bb99cb32"
+
 VALID_FIXTURES = (
     "valid-empty.json",
     "valid-ready-action.json",
@@ -44,9 +47,22 @@ def _expected_digest() -> str:
     return digest
 
 
+def _directory_digest() -> str:
+    paths = sorted(path for path in CONTRACT_ROOT.rglob("*") if path.is_file())
+    manifest = "".join(
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
+        f"contracts/visual-state/{path.relative_to(CONTRACT_ROOT).as_posix()}\n"
+        for path in paths
+    )
+    return hashlib.sha256(manifest.encode()).hexdigest()
+
+
 def test_visual_state_schema_capsule() -> None:
     schema_bytes = SCHEMA_PATH.read_bytes()
-    assert hashlib.sha256(schema_bytes).hexdigest() == _expected_digest()
+    schema_digest = hashlib.sha256(schema_bytes).hexdigest()
+    assert schema_digest == _expected_digest()
+    assert schema_digest == FROZEN_V1_SCHEMA_SHA256
+    assert _directory_digest() == FROZEN_V1_DIRECTORY_SHA256
 
     schema = _json(SCHEMA_PATH)
     Draft202012Validator.check_schema(schema)

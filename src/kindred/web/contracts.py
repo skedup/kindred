@@ -28,36 +28,56 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
+_NO_CONTROL_CHARACTERS = r"^[^\x00-\x1f\x7f]+$"
+_ACTION_IDENTIFIER = r"^[a-z][a-z0-9_]{0,63}$"
+_MOTION_INSTANCE_IDENTIFIER = r"^tick:[1-9][0-9]*$"
+_MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991
+
 
 class VisualActionV1(BaseModel):
     """One validated action semantic consumed by the desktop visual pack."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=64, pattern=_ACTION_IDENTIFIER)
 
 
 class VisualStateEmptyV1(BaseModel):
     """Current-schema database with no committed tick yet."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal[1] = 1
-    source_id: str = Field(min_length=1)
+    source_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_NO_CONTROL_CHARACTERS,
+    )
     status: Literal["empty"] = "empty"
 
 
 class VisualStateReadyV1(BaseModel):
     """Latest committed action-only resident projection."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal[1] = 1
-    source_id: str = Field(min_length=1)
+    source_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_NO_CONTROL_CHARACTERS,
+    )
     status: Literal["ready"] = "ready"
-    revision: int = Field(ge=1)
-    committed_at: str = Field(min_length=1)
-    motion_instance_id: str = Field(pattern=r"^tick:[1-9][0-9]*$")
+    revision: int = Field(ge=1, le=_MAX_SAFE_JSON_INTEGER)
+    committed_at: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=_NO_CONTROL_CHARACTERS,
+    )
+    motion_instance_id: str = Field(
+        max_length=64,
+        pattern=_MOTION_INSTANCE_IDENTIFIER,
+    )
     action: VisualActionV1 | None
 
 
