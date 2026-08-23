@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "source_id": "install:0123456789abcdef0123456789abcdef",
+  "status": "ready",
+  "revision": 43,
+  "committed_at": "2026-08-23T10:16:00+08:00",
+  "motion_instance_id": "tick:43",
+  "action": null
+}
