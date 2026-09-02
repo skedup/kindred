@@ -46,6 +46,7 @@ from kindred.llm.tools import (
     call_tool_handler,
     effect_for_tool,
     tool_map,
+    unknown_tool_result,
 )
 from kindred_capability_sdk import ToolCall, ToolDef, ToolResult
 
@@ -205,7 +206,12 @@ class MockLlmClient:
                 and "lock_action" in known_tools
             ):
                 lock_call = ToolCall("lock_action", {"action_step": action_step}, "mock-lock")
-                lock_result = call_tool_handler(handler, lock_call)
+                lock_result = call_tool_handler(
+                    handler,
+                    lock_call,
+                    tool_def=known_tools[lock_call.name],
+                    round_index=1,
+                )
                 default_events.append(
                     ToolEvent(
                         1, lock_call, lock_result, effect_for_tool(known_tools, lock_call.name)
@@ -221,7 +227,12 @@ class MockLlmClient:
                         ToolEvent(
                             2,
                             outcome_call,
-                            call_tool_handler(handler, outcome_call),
+                            call_tool_handler(
+                                handler,
+                                outcome_call,
+                                tool_def=known_tools[outcome_call.name],
+                                round_index=2,
+                            ),
                             effect_for_tool(known_tools, outcome_call.name),
                         )
                     )
@@ -240,7 +251,12 @@ class MockLlmClient:
             rounds_done = round_index
             results: list[ToolResult] = []
             for call in scripted_round.calls:
-                result = self._mock_tool_result(call, handler, known_tools)
+                result = self._mock_tool_result(
+                    call,
+                    handler,
+                    known_tools,
+                    round_index=round_index,
+                )
                 results.append(result)
                 events.append(
                     ToolEvent(
@@ -282,14 +298,17 @@ class MockLlmClient:
         call: ToolCall,
         handler: ToolHandler,
         known_tools: dict[str, ToolDef],
+        *,
+        round_index: int,
     ) -> ToolResult:
         if call.name not in known_tools:
-            return ToolResult.error(
-                call,
-                error_type="UnknownTool",
-                message="tool is not registered",
-            )
-        return call_tool_handler(handler, call)
+            return unknown_tool_result(call, round_index=round_index)
+        return call_tool_handler(
+            handler,
+            call,
+            tool_def=known_tools[call.name],
+            round_index=round_index,
+        )
 
     @staticmethod
     def _assert_expected_results(

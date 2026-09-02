@@ -76,7 +76,7 @@ def wire_from_session(session: Mapping[str, Any], *, dm_scope: str) -> OpenClawW
                 "approved_peer": {
                     "provider": origin["provider"],
                     "account_id": origin["accountId"],
-                    "target": origin["to"],
+                    "target": delivery["to"],
                 },
                 "outbound_route": {
                     "channel": delivery["channel"],

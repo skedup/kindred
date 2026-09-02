@@ -253,6 +253,13 @@ def _run_scenario_tick(
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
 
     with ExitStack() as resources:
+        from kindred.runtime.observed_invoke import (
+            create_runtime_telemetry,
+            observed_invoke,
+        )
+
+        telemetry = create_runtime_telemetry(config)
+        resources.callback(telemetry.close)
         db = resources.enter_context(KindredDB.open(db_path))
         graph = _build_client_graph(
             client,
@@ -262,7 +269,13 @@ def _run_scenario_tick(
             resource_stack=resources,
         )
         try:
-            final = graph.invoke({"trigger_source": "heartbeat", "triggered_at": triggered_at})
+            final = observed_invoke(
+                lambda: graph.invoke({"trigger_source": "heartbeat", "triggered_at": triggered_at}),
+                telemetry=telemetry,
+                run_kind="tick",
+                execution_mode="mock",
+                trigger_source="heartbeat",
+            )
         except ColdStartError:
             _echo_cold_start(db_path)
             return
@@ -318,6 +331,13 @@ def _run_real_llm_tick(
 
     try:
         with ExitStack() as resources:
+            from kindred.runtime.observed_invoke import (
+                create_runtime_telemetry,
+                observed_invoke,
+            )
+
+            telemetry = create_runtime_telemetry(config)
+            resources.callback(telemetry.close)
             db = resources.enter_context(KindredDB.open(db_path))
             graph = _build_client_graph(
                 client,
@@ -327,7 +347,15 @@ def _run_real_llm_tick(
                 resource_stack=resources,
             )
             try:
-                final = graph.invoke({"trigger_source": "heartbeat", "triggered_at": triggered_at})
+                final = observed_invoke(
+                    lambda: graph.invoke(
+                        {"trigger_source": "heartbeat", "triggered_at": triggered_at}
+                    ),
+                    telemetry=telemetry,
+                    run_kind="tick",
+                    execution_mode="real",
+                    trigger_source="heartbeat",
+                )
             except ColdStartError:
                 _echo_cold_start(db_path)
                 return

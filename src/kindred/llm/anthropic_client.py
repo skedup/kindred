@@ -36,12 +36,21 @@ from __future__ import annotations
 import json
 import logging
 import os
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from kindred.llm._http_helpers import ParsedJsonResponse
 from kindred.llm.client import LlmClientError
 from kindred.llm.real_client import parse_llm_json, system_prompt_for, text_fingerprint
+from kindred.telemetry import (
+    CanonicalUsage,
+    PromptShape,
+    extract_anthropic_usage,
+    observe_llm_request,
+    safe_response_model,
+)
 
 if TYPE_CHECKING:
     from kindred.config import KindredLlmConfig
@@ -142,29 +151,47 @@ class AnthropicLlmClient:
             "content-type": "application/json",
         }
 
-        try:
-            resp = self._client.post(url, json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            msg = f"AnthropicLlmClient: HTTP 请求失败 (role={role}, model={self._model})：{exc}"
-            raise AnthropicLlmClientError(msg) from exc
+        with observe_llm_request(
+            role=role,
+            round_index=1,
+            provider="anthropic",
+            requested_model=self._model,
+            prompt_shape_factory=partial(_extract_prompt_shape, payload),
+        ) as observation:
+            try:
+                request = self._client.build_request("POST", url, json=payload, headers=headers)
+                observation.record_payload_json_bytes(len(request.content))
+                observation.mark_request_started()
+                raw_response = self._client.send(request)
+            except httpx.HTTPError as exc:
+                msg = f"AnthropicLlmClient: HTTP 请求失败 (role={role}, model={self._model})：{exc}"
+                raise AnthropicLlmClientError(msg) from exc
 
-        if resp.status_code != httpx.codes.OK:
-            # 不回显响应体（可能含模型/凭据相关诊断），只记状态码 + 字节数。
-            msg = (
-                f"AnthropicLlmClient: HTTP {resp.status_code} (role={role}, "
-                f"model={self._model}, response_bytes={len(resp.content)})"
+            if raw_response.status_code != httpx.codes.OK:
+                observation.record_http_status(raw_response.status_code)
+                # 不回显响应体（可能含模型/凭据相关诊断），只记状态码 + 字节数。
+                msg = (
+                    f"AnthropicLlmClient: HTTP {raw_response.status_code} (role={role}, "
+                    f"model={self._model}, response_bytes={len(raw_response.content)})"
+                )
+                raise AnthropicLlmClientError(msg)
+
+            response = ParsedJsonResponse.parse(raw_response)
+            observation.record_response(
+                http_status=raw_response.status_code,
+                usage_factory=lambda: self._canonical_usage(response),
+                response_model_factory=lambda: _response_model(response),
             )
-            raise AnthropicLlmClientError(msg)
-
-        text = self._extract_text(resp, role=role)
-        parsed = self._parse_json(text, role=role)
-        _LOG.debug(
-            "AnthropicLlmClient ok role=%s model=%s usage=%s",
-            role,
-            self._model,
-            self._safe_usage(resp),
-        )
-        return parsed
+            text = self._extract_text(response, role=role)
+            parsed = self._parse_json(text, role=role)
+            _LOG.debug(
+                "AnthropicLlmClient ok role=%s model=%s usage=%s",
+                role,
+                self._model,
+                self._canonical_usage(response),
+            )
+            return parsed
+        raise AssertionError("LLM request observation suppressed control flow")
 
     def close(self) -> None:
         """关闭底层 httpx client（daemon 退出时调）。"""
@@ -172,13 +199,12 @@ class AnthropicLlmClient:
 
     # ── 私有 helper ────────────────────────────────────────────
 
-    def _extract_text(self, resp: httpx.Response, *, role: Role) -> str:
+    def _extract_text(self, response: ParsedJsonResponse, *, role: Role) -> str:
         """取 Messages API 响应的首个 text 块；先挡拒答（stop_reason=refusal）。"""
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError) as exc:
-            msg = f"AnthropicLlmClient: 响应非 JSON (role={role})：{exc}"
-            raise AnthropicLlmClientError(msg) from exc
+        if response.json_error:
+            msg = f"AnthropicLlmClient: 响应非 JSON (role={role})"
+            raise AnthropicLlmClientError(msg)
+        body = response.body
         if not isinstance(body, dict):
             msg = f"AnthropicLlmClient: 响应顶层非 dict (role={role})"
             raise AnthropicLlmClientError(msg)
@@ -224,13 +250,31 @@ class AnthropicLlmClient:
         return parsed
 
     @staticmethod
-    def _safe_usage(resp: httpx.Response) -> Any:
-        """从响应体取 usage 供 debug 日志；任何异常吞掉返 None（日志不该影响主流程）。"""
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError):
-            return None
+    def _safe_usage(response: ParsedJsonResponse) -> Any:
+        """从单次解析的响应体取 allowlisted usage。"""
+        body = response.body
         return body.get("usage") if isinstance(body, dict) else None
+
+    @staticmethod
+    def _canonical_usage(response: ParsedJsonResponse) -> CanonicalUsage:
+        return extract_anthropic_usage(AnthropicLlmClient._safe_usage(response))
+
+
+def _extract_prompt_shape(payload: dict[str, Any]) -> PromptShape:
+    messages = payload["messages"]
+    return PromptShape(
+        system_text_chars=len(payload["system"]),
+        initial_user_text_chars=len(messages[0]["content"]),
+        tool_schema_json_chars=0,
+        response_schema_json_chars=0,
+        model_history_json_chars=0,
+        tool_result_json_chars=0,
+    )
+
+
+def _response_model(response: ParsedJsonResponse) -> str | None:
+    body = response.body
+    return safe_response_model(body.get("model")) if isinstance(body, dict) else None
 
 
 __all__ = ["AnthropicLlmClient", "AnthropicLlmClientError"]

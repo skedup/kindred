@@ -22,6 +22,9 @@ from .registry import (
 from .registry import (
     RegisteredTool as RegisteredTool,
 )
+from .resources import (
+    PackageResourceError as PackageResourceError,
+)
 from .runtime import (
     HostExecutionContext as HostExecutionContext,
 )

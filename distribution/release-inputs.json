@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release_version": "0.3.1",
+  "release_version": "0.4.0",
   "mouth_hosts": {
     "openclaw": {
       "maturity": "supported",
@@ -18,6 +18,15 @@
       ]
     }
   },
+  "xiaohongshu": {
+    "source_sha": "b019fdbf02ba0e8d4f4fdb4f15b58230a8493f5d",
+    "release_tag": "kindred-xhs-v0.3.3",
+    "wheel": ["kindred-capability-xiaohongshu", "0.3.3", "kindred_capability_xiaohongshu-0.3.3-py3-none-any.whl", 22782, "212b4de6b4a952e3176f422f3378baccb6f426e6b4fdcd9e86dc4c4f997f27be", "MIT"],
+    "sidecars": {
+      "macos-arm64": ["kindred-xhs-sidecar-2.7.2-macos-arm64.tar.gz", "2.7.2", 85588785, "053c5aa43e2a009b1a534da35b08bffb3b9957cc6165f889f953001e8cbceded", "MIT", 1],
+      "ubuntu24-x86_64": ["kindred-xhs-sidecar-2.7.2-ubuntu-24.04-x86_64.tar.gz", "2.7.2", 102969417, "c70729e574ce489dab170f533e04e0f098fb32121f2daca3af5d216f7b61c407", "MIT", 1]
+    }
+  },
   "build_tools": {
     "node": "22.18.0",
     "pnpm": "11.7.0",
@@ -26,9 +35,9 @@
     "pnpm_lock_sha256": "db16c548e256ee09cec71ed3a5131aea0d3c5edd9f7afdc149dc503095cc68be"
   },
   "first_party": [
-    ["kindred", "0.3.1", ".", "kindred-0.3.1-py3-none-any.whl", "2abdab427c5cbea232791ce8f46dcee837bec65932eeaf10c4d3948ec3f68aa0"],
+    ["kindred", "0.4.0", ".", "kindred-0.4.0-py3-none-any.whl", "3f4136d034e757c6e93c12113443858669ae413dd9815e610ac69945a2d61336"],
     ["kindred-capability-sdk", "0.1.0", "packages/kindred-capability-sdk", "kindred_capability_sdk-0.1.0-py3-none-any.whl", "132abc9f70212a1b044abec78bf62e850bb82b3d3dd38d588e761d3e4518bc01"],
-    ["kindred-capability-compose", "0.1.0", "packages/kindred-capability-compose", "kindred_capability_compose-0.1.0-py3-none-any.whl", "50565daec9777214ec5893b5076b07fe02a3d84c021f9b7a15062e8e9036811b"],
+    ["kindred-capability-compose", "0.1.0", "packages/kindred-capability-compose", "kindred_capability_compose-0.1.0-py3-none-any.whl", "95724a5f2156e53a7f8c04f6aa30706c042935e4053b0362d2f5e558f76e58ef"],
     ["kindred-capability-inventory", "0.1.0", "packages/kindred-capability-inventory", "kindred_capability_inventory-0.1.0-py3-none-any.whl", "94ce230f9b87d9fdd7b366d655b76c1ba7a728b9bd63786a8822e1c95218de45"],
     ["kindred-capability-send", "0.1.0", "packages/kindred-capability-send", "kindred_capability_send-0.1.0-py3-none-any.whl", "ac9177b8c984f4dd06953f8b2726782e7457cdff940d21f4f40dde8cbc26bcc3"],
     ["kindred-capability-draw", "0.1.0", "packages/kindred-capability-draw", "kindred_capability_draw-0.1.0-py3-none-any.whl", "9831c46989d49b73e036910256ae27d6e6860a20bd6c909881059833b563f89d"]
@@ -125,7 +134,8 @@
     "starlette": "BSD-3-Clause", "tenacity": "Apache-2.0", "typing-extensions": "PSF-2.0",
     "typing-inspection": "MIT", "urllib3": "MIT", "uuid-utils": "BSD-3-Clause",
     "uvicorn": "BSD-3-Clause", "websocket-client": "Apache-2.0", "websockets": "BSD-3-Clause",
-    "xxhash": "BSD-2-Clause", "zstandard": "BSD-3-Clause"
+    "xxhash": "BSD-2-Clause", "zstandard": "BSD-3-Clause",
+    "kindred-capability-xiaohongshu": "MIT"
   },
   "web_runtime": [
     ["@babel/helper-string-parser", "7.29.7", "MIT"], ["@babel/helper-validator-identifier", "7.29.7", "MIT"],

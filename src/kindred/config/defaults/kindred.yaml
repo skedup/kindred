@@ -49,6 +49,15 @@ debug:
   # 只保留最近的逐 tick debug dump；不会清理 debug 目录中的其他文件。
   dump_max_files: 200
 
+# 本地安全数值 telemetry。OBS3 已完成 Provider/graph 接线及等价/性能门；默认启用。
+# 只记录 token、duration、状态和安全维度，不记录 prompt/response/tool payload。
+observability:
+  enabled: true
+  retention_days: 90
+  daily_token_warn: null
+  tick_duration_warn_seconds: null
+  dream_duration_warn_seconds: null
+
 daemon:
   # daemon 监听 partner 消息的 main session（docs/13 §8.3 sessionKey 约定）。
   # 部署时按真实 session 覆盖，例如 agent:main:wecom:direct:<id>。
@@ -129,3 +138,11 @@ capabilities:
     side_effect_activities:
       - reach_out_to_user
     settings: {}
+  xiaohongshu:
+    enabled: true
+    side_effect_activities:
+      - play_xiaohongshu
+    settings:
+      mcp_url: "http://127.0.0.1:18060"
+      timeout: 45
+      write_mode: none

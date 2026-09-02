@@ -21,16 +21,22 @@ class PlatformServiceError(RuntimeError):
 
 
 def service_config_path() -> Path:
+    if configured := os.environ.get("KINDRED_CONFIG"):
+        return Path(configured)
     root = Path(os.environ.get(ENV_XDG_CONFIG_HOME, Path.home() / ".config"))
     return root / "kindred/config.yaml"
 
 
 def install_services(config_path: Path, *, include_web: bool) -> tuple[str, ...]:
-    _, paths, rendered = _definitions(config_path)
-    names = _NAMES if include_web else ("heart",)
+    platform, paths, rendered = _definitions(config_path)
+    names = _NAMES if include_web or paths["web"].exists() else ("heart",)
     paths["heart"].parent.mkdir(parents=True, exist_ok=True)
     for name in names:
-        _create_exact(paths[name], rendered[name])
+        _create_exact(
+            paths[name],
+            rendered[name],
+            legacy=_legacy_service_definitions(platform, name, rendered[name]),
+        )
     return names
 
 
@@ -119,6 +125,8 @@ def _definitions(config_path: Path | None) -> tuple[str, dict[str, Path], dict[s
         python = Path(sys.executable).absolute()
         if not python.is_file():
             raise FileNotFoundError(python)
+        service_path = _service_search_path(python)
+        home = Path(os.environ.get("HOME", Path.home())).expanduser().resolve()
     except Exception as exc:
         raise PlatformServiceError("service executable or config is missing or invalid") from exc
     platform, paths = _service_paths()
@@ -127,7 +135,20 @@ def _definitions(config_path: Path | None) -> tuple[str, dict[str, Path], dict[s
     rendered = {}
     for name in _NAMES:
         command = "run" if name == "heart" else "serve"
-        argv = [str(python), "-m", "kindred.cli", command, "--config", str(config_path)]
+        argv = [
+            "/usr/bin/env",
+            "-i",
+            f"HOME={home}",
+            f"PATH={service_path}",
+            f"KINDRED_CONFIG={config_path}",
+            str(python),
+            "-I",
+            "-m",
+            "kindred.cli",
+            command,
+            "--config",
+            str(config_path),
+        ]
         for value in argv:
             _quote(value)
         if platform == "darwin":
@@ -145,6 +166,10 @@ def _definitions(config_path: Path | None) -> tuple[str, dict[str, Path], dict[s
                 template.read_text()
                 .replace("__DESCRIPTION__", f"Kindred {name.title()}")
                 .replace("__EXEC_START__", command_line)
+                .replace(
+                    "__ENVIRONMENT__",
+                    "",
+                )
             )
     return platform, paths, rendered
 
@@ -182,7 +207,11 @@ def _recoverable_owned() -> tuple[str, dict[str, Path]]:
     return platform, paths
 
 
-def _is_kindred_definition(platform: str, name: str, path: Path) -> bool:
+def _is_kindred_definition(
+    platform: str,
+    name: str,
+    path: Path,
+) -> bool:
     if path.is_symlink() or not path.is_file():
         return False
     command = "run" if name == "heart" else "serve"
@@ -196,6 +225,29 @@ def _is_kindred_definition(platform: str, name: str, path: Path) -> bool:
             ]
             if len(commands) != 1:
                 return False
+            environments = [
+                line for line in actual_text.splitlines() if line.startswith("Environment=")
+            ]
+            identity = _kindred_argv_identity(shlex.split(commands[0].replace("%%", "%")), command)
+            if identity is None:
+                return False
+            outer_path = None
+            if identity[2] is None:
+                if not environments:
+                    pass
+                elif len(environments) != 1:
+                    return False
+                else:
+                    assignments = shlex.split(
+                        environments[0].removeprefix("Environment=").replace("%%", "%")
+                    )
+                    if len(assignments) != 1 or not assignments[0].startswith("PATH="):
+                        return False
+                    outer_path = assignments[0].removeprefix("PATH=")
+                    if not _is_safe_service_path(outer_path):
+                        return False
+            elif environments:
+                return False
             expected = (
                 files("kindred.service_templates")
                 .joinpath("systemd.service")
@@ -203,10 +255,17 @@ def _is_kindred_definition(platform: str, name: str, path: Path) -> bool:
                 .replace("__DESCRIPTION__", f"Kindred {name.title()}")
                 .replace("__EXEC_START__", commands[0])
             )
-            return actual_text == expected and _is_kindred_argv(shlex.split(commands[0]), command)
+            if outer_path is not None:
+                expected = expected.replace("__ENVIRONMENT__", environments[0])
+            elif identity[2] is None:
+                expected = expected.replace("__ENVIRONMENT__\n", "")
+            else:
+                expected = expected.replace("__ENVIRONMENT__", "")
+            return actual_text == expected
         actual_bytes = path.read_bytes()
         payload = plistlib.loads(actual_bytes)
         argv = payload.get("ProgramArguments")
+        environment = payload.get("EnvironmentVariables")
         stdout, stderr = payload.get("StandardOutPath"), payload.get("StandardErrorPath")
         expected = plistlib.loads(
             files("kindred.service_templates").joinpath("launchd.plist").read_bytes()
@@ -217,9 +276,22 @@ def _is_kindred_definition(platform: str, name: str, path: Path) -> bool:
             StandardOutPath=stdout,
             StandardErrorPath=stderr,
         )
+        if environment is not None:
+            expected["EnvironmentVariables"] = environment
+        identity = _kindred_argv_identity(argv, command)
+        if identity is None:
+            return False
+        if identity[2] is None:
+            valid_environment = environment is None or (
+                isinstance(environment, dict)
+                and set(environment) == {"PATH"}
+                and _is_safe_service_path(environment.get("PATH"))
+            )
+        else:
+            valid_environment = environment is None
         return (
             actual_bytes == plistlib.dumps(expected, sort_keys=True)
-            and _is_kindred_argv(argv, command)
+            and valid_environment
             and isinstance(stdout, str)
             and isinstance(stderr, str)
             and Path(stdout).is_absolute()
@@ -229,15 +301,33 @@ def _is_kindred_definition(platform: str, name: str, path: Path) -> bool:
         return False
 
 
-def _is_kindred_argv(argv: object, command: str) -> bool:
-    return (
-        isinstance(argv, list)
-        and len(argv) == 6
-        and all(isinstance(value, str) for value in argv)
-        and Path(argv[0]).is_absolute()
-        and argv[1:5] == ["-m", "kindred.cli", command, "--config"]
-        and Path(argv[5]).is_absolute()
-    )
+def _kindred_argv_identity(
+    argv: object, command: str
+) -> tuple[Path, Path, dict[str, str] | None] | None:
+    if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
+        return None
+    if len(argv) == 6 and argv[1:5] == ["-m", "kindred.cli", command, "--config"]:
+        python, config = Path(argv[0]), Path(argv[5])
+        return (python, config, None) if python.is_absolute() and config.is_absolute() else None
+    if len(argv) != 12 or argv[:2] != ["/usr/bin/env", "-i"]:
+        return None
+    try:
+        environment = dict(value.split("=", 1) for value in argv[2:5])
+    except ValueError:
+        return None
+    if set(environment) != {"HOME", "PATH", "KINDRED_CONFIG"}:
+        return None
+    python, config = Path(argv[5]), Path(argv[11])
+    if (
+        argv[6:11] != ["-I", "-m", "kindred.cli", command, "--config"]
+        or not python.is_absolute()
+        or not config.is_absolute()
+        or not Path(environment["HOME"]).is_absolute()
+        or not _is_safe_service_path(environment["PATH"])
+        or environment["KINDRED_CONFIG"] != str(config)
+    ):
+        return None
+    return python, config, environment
 
 
 def _quote(value: str) -> str:
@@ -246,10 +336,94 @@ def _quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
 
 
-def _create_exact(path: Path, content: str) -> None:
+def _service_search_path(python: Path) -> str:
+    home = Path(os.environ.get("HOME", Path.home()))
+    paths = [python.parent, home / ".local/bin"]
+    if sys.platform == "darwin":
+        paths.extend((Path("/opt/homebrew/opt/node@22/bin"), Path("/opt/homebrew/bin")))
+    paths.extend(
+        (
+            Path("/usr/local/bin"),
+            Path("/usr/bin"),
+            Path("/bin"),
+            Path("/usr/sbin"),
+            Path("/sbin"),
+        )
+    )
+    result = os.pathsep.join(dict.fromkeys(str(path) for path in paths))
+    if not _is_safe_service_path(result):
+        raise PlatformServiceError("service PATH is invalid")
+    return result
+
+
+def _is_safe_service_path(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    parts = value.split(os.pathsep)
+    return all(
+        part and Path(part).is_absolute() and not any(ord(char) < 32 for char in part)
+        for part in parts
+    )
+
+
+def _legacy_service_definitions(platform: str, name: str, content: str) -> tuple[str, str]:
+    command = "run" if name == "heart" else "serve"
+    if platform == "linux":
+        current = next(
+            line.removeprefix("ExecStart=")
+            for line in content.splitlines()
+            if line.startswith("ExecStart=")
+        )
+        identity = _kindred_argv_identity(shlex.split(current.replace("%%", "%")), command)
+        if identity is None or identity[2] is None:
+            raise PlatformServiceError("current service definition is invalid")
+        python, config, environment = identity
+        assert environment is not None
+        legacy_argv = [str(python), "-m", "kindred.cli", command, "--config", str(config)]
+        template = files("kindred.service_templates").joinpath("systemd.service").read_text()
+        base = template.replace("__DESCRIPTION__", f"Kindred {name.title()}").replace(
+            "__EXEC_START__", " ".join(_quote(value) for value in legacy_argv)
+        )
+        path_assignment = _quote("PATH=" + environment["PATH"])
+        return (
+            base.replace("__ENVIRONMENT__\n", ""),
+            base.replace("__ENVIRONMENT__", f"Environment={path_assignment}"),
+        )
+    payload = plistlib.loads(content.encode())
+    identity = _kindred_argv_identity(payload.get("ProgramArguments"), command)
+    if identity is None or identity[2] is None:
+        raise PlatformServiceError("current service definition is invalid")
+    python, config, environment = identity
+    assert environment is not None
+    payload["ProgramArguments"] = [
+        str(python),
+        "-m",
+        "kindred.cli",
+        command,
+        "--config",
+        str(config),
+    ]
+    plain = plistlib.dumps(payload, sort_keys=True).decode()
+    payload["EnvironmentVariables"] = {"PATH": environment["PATH"]}
+    return plain, plistlib.dumps(payload, sort_keys=True).decode()
+
+
+def _create_exact(path: Path, content: str, *, legacy: tuple[str, ...] = ()) -> None:
     if path.exists():
-        if not path.is_file() or path.read_text(encoding="utf-8") != content:
+        if not path.is_file():
             raise PlatformServiceError(f"Kindred service file drifted: {path.name}")
+        current = path.read_text(encoding="utf-8")
+        if current == content:
+            return
+        if current not in legacy:
+            raise PlatformServiceError(f"Kindred service file drifted: {path.name}")
+        staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            with staged.open("x", encoding="utf-8") as stream:
+                stream.write(content)
+            os.replace(staged, path)
+        finally:
+            staged.unlink(missing_ok=True)
         return
     try:
         with path.open("x", encoding="utf-8") as stream:

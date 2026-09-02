@@ -30,6 +30,7 @@ from langgraph.graph import END, START, StateGraph
 from kindred.graph import dream as _dream_mod
 from kindred.graph.dream.routing import ROUTE_STEP5_LAND
 from kindred.state.dream import DreamState
+from kindred.telemetry import observe_graph_node
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -63,6 +64,7 @@ def _add_node(
     ``Callable[[DreamState], dict[str, Any]]`` 推断不匹配，运行时正常（同 tick）。
     """
     node = provided if provided is not None else default
+    node = observe_graph_node(name, node)
     builder.add_node(name, node)  # type: ignore[call-overload]
 
 

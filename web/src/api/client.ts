@@ -14,6 +14,12 @@ import type {
   NowResponse,
   RelationshipView,
   StreamResponse,
+  TelemetryRunDetailResponse,
+  TelemetryRunKind,
+  TelemetryRunListResponse,
+  TelemetryRunStatus,
+  TelemetrySummaryResponse,
+  TelemetryWindow,
 } from './types'
 
 const BASE = '/api'
@@ -84,6 +90,33 @@ export async function fetchArtifactText(
 
 export function artifactMemberUrl(tickId: number, ordinal: number, member: number): string {
   return `${BASE}${artifactPath(tickId, ordinal, member)}`
+}
+
+export function fetchTelemetrySummary(
+  window: TelemetryWindow = '24h',
+): Promise<TelemetrySummaryResponse> {
+  return getJson<TelemetrySummaryResponse>(`/observability/summary?window=${window}`)
+}
+
+export function fetchTelemetryRuns(params?: {
+  cursor?: string
+  limit?: number
+  kind?: TelemetryRunKind
+  status?: TelemetryRunStatus
+  includeMock?: boolean
+}): Promise<TelemetryRunListResponse> {
+  const query = new URLSearchParams()
+  if (params?.cursor != null) query.set('cursor', params.cursor)
+  if (params?.limit != null) query.set('limit', String(params.limit))
+  if (params?.kind != null) query.set('kind', params.kind)
+  if (params?.status != null) query.set('status', params.status)
+  if (params?.includeMock) query.set('include_mock', 'true')
+  const encoded = query.toString()
+  return getJson<TelemetryRunListResponse>(`/observability/runs${encoded ? `?${encoded}` : ''}`)
+}
+
+export function fetchTelemetryRunDetail(runId: string): Promise<TelemetryRunDetailResponse> {
+  return getJson<TelemetryRunDetailResponse>(`/observability/runs/${encodeURIComponent(runId)}`)
 }
 
 function buildQuery(params?: { before?: number; cursor?: string; limit?: number }): string {

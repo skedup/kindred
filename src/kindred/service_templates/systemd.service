@@ -4,6 +4,7 @@ After=network-online.target
 
 [Service]
 Type=simple
+__ENVIRONMENT__
 ExecStart=__EXEC_START__
 Restart=on-failure
 RestartSec=5

@@ -29,9 +29,9 @@ import threading
 import time
 from collections.abc import Mapping
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import date, datetime
 from types import FrameType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from kindred.config import DEFAULT_WORLD_TIMEZONE, SoulHistoryLayout
 from kindred.db import KindredDB
@@ -58,8 +58,11 @@ if TYPE_CHECKING:
     from kindred.observability import PromptDumper
     from kindred.runtime.history_sync import HistorySync
     from kindred.runtime.io_bridge import IOBridge
+    from kindred.runtime.telemetry_thresholds import TelemetryThresholdMonitor
     from kindred.state.dream import DreamState
     from kindred.state.tick import TickState
+    from kindred.telemetry import TelemetryFacade
+    from kindred.telemetry.contracts import TriggerSource
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +106,8 @@ class HeartDaemon:
         clock: Any = time.monotonic,
         sleep: Any = time.sleep,
         wall_clock: Any | None = None,
+        telemetry: TelemetryFacade | None = None,
+        threshold_monitor: TelemetryThresholdMonitor | None = None,
     ) -> None:
         self._config = config
         self._prompt_dumper = prompt_dumper
@@ -133,6 +138,8 @@ class HeartDaemon:
         self._clock = clock
         self._sleep = sleep
         self._tick_count = 0
+        self._telemetry = telemetry
+        self._threshold_monitor = threshold_monitor
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -205,6 +212,27 @@ class HeartDaemon:
         try:
             with ExitStack() as resources:
                 db = resources.enter_context(KindredDB.open(db_path))
+                if self._telemetry is None:
+                    from kindred.runtime.observed_invoke import create_runtime_telemetry
+
+                    self._telemetry = create_runtime_telemetry(self._config)
+                    owned_telemetry = self._telemetry
+
+                    def close_owned_telemetry() -> None:
+                        owned_telemetry.close()
+                        if self._telemetry is owned_telemetry:
+                            self._telemetry = None
+
+                    resources.callback(close_owned_telemetry)
+                if self._threshold_monitor is None:
+                    from kindred.runtime.telemetry_thresholds import (
+                        create_runtime_threshold_monitor,
+                    )
+
+                    self._threshold_monitor = create_runtime_threshold_monitor(
+                        self._config,
+                        telemetry=self._telemetry,
+                    )
                 if self._io_bridge is None or self._history_sync is None:
                     self._host_preparation = self._prepare_mouth_host()
                 # 心经 Gateway 出向（io_bridge）+ 拉 chat.history（history_sync）。
@@ -438,11 +466,19 @@ class HeartDaemon:
         from kindred.graph.tick.sense_io import ColdStartError
         from kindred.llm.client import LlmClientError
 
-        source = event.source
+        source = cast("TriggerSource", event.source)
         # ColdStartError 不 catch：run() 已在 invoke 前挡空库；若运行中 db 被清空
         # 而 raise，属致命异常态，让它冒泡到 run() 终止 daemon，而非静默空转。
         try:
-            final = graph.invoke(event.to_invoke_input())
+            from kindred.runtime.observed_invoke import observed_invoke
+
+            final = observed_invoke(
+                lambda: graph.invoke(event.to_invoke_input()),
+                telemetry=self._telemetry,
+                run_kind="tick",
+                execution_mode="real",
+                trigger_source=source,
+            )
         except (NodeContractError, LlmClientError) as exc:
             # 单 tick 失败不杀 daemon：记录后继续呼吸。路 X / earlier milestone：watcher 无 ack；
             # sense_io 若已推进 cursor，本批消息不会因下游失败回放。只有读取/推进前
@@ -453,6 +489,8 @@ class HeartDaemon:
                 raise
             logger.error("tick failed (source=%s): %s: %s", source, type(exc).__name__, exc)
             return False
+        finally:
+            self._check_telemetry_thresholds()
         self._tick_count += 1
         logger.info(
             "tick #%d done (source=%s, act=%s, significance=%s)",
@@ -496,12 +534,20 @@ class HeartDaemon:
             return False
         prev_state = db.get_state_latest() or {}
         try:
-            self._dream_graph.invoke(  # type: ignore[union-attr]
-                {
-                    "triggered_at": now.isoformat(timespec="seconds"),
-                    "dream_date": due,
-                    "prev_state": prev_state,
-                }
+            from kindred.runtime.observed_invoke import observed_invoke
+
+            observed_invoke(
+                lambda: self._dream_graph.invoke(  # type: ignore[union-attr]
+                    {
+                        "triggered_at": now.isoformat(timespec="seconds"),
+                        "dream_date": due,
+                        "prev_state": prev_state,
+                    }
+                ),
+                telemetry=self._telemetry,
+                run_kind="dream",
+                execution_mode="real",
+                dream_date=date.fromisoformat(due),
             )
         except (NodeContractError, LlmClientError) as exc:
             # 单次做梦失败不杀 daemon（软心降级 MEMORY R3）；返 False 落正常等待
@@ -513,9 +559,23 @@ class HeartDaemon:
                 exc,
             )
             return False
+        finally:
+            self._check_telemetry_thresholds()
         self._tick_count += 1
         logger.info("dream #%d done (dream_date=%s)", self._tick_count, due)
         return True
+
+    def _check_telemetry_thresholds(self) -> None:
+        monitor = self._threshold_monitor
+        if monitor is None:
+            return
+        try:
+            monitor.check()
+        except Exception as exc:  # noqa: BLE001 - injected monitors remain fail-open
+            logger.warning(
+                "telemetry degraded operation=threshold_monitor error_type=%s",
+                type(exc).__name__,
+            )
 
     def _reached_limit(self) -> bool:
         return self._max_ticks is not None and self._tick_count >= self._max_ticks

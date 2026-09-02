@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import os
+import sqlite3
 import tarfile
 import zipfile
 from copy import deepcopy
@@ -21,6 +22,7 @@ from fastapi.testclient import TestClient
 from kindred.activity import list_registered_actions, list_registered_activities
 from kindred.config import DEFAULT_CONFIG, DEFAULT_WEB_HOST, DEFAULT_WEB_PORT
 from kindred.config.schema import KindredConfig
+from kindred.config.secrets import SUPPORTED_SECRET_KEYS
 from kindred.db import KindredDB
 from kindred.db.places import derive_place_visit
 from kindred.graph.dream.summarize import step1_summarize
@@ -36,10 +38,17 @@ from kindred.llm.xai_client import XaiLlmClient
 from kindred.location.models import LocationOrigin, LocationQuery
 from kindred.providers.environment import VirtualEnvironmentProvider
 from kindred.providers.location import VirtualLocationProvider
+from kindred.runtime.observed_invoke import observed_invoke
 from kindred.runtime.pidfile import acquire, read_pid
 from kindred.runtime.scheduler import Debouncer
 from kindred.runtime.watcher import MessageCursor, MessageWatcher
 from kindred.state._seed import make_doc_example_state
+from kindred.telemetry import (
+    TelemetryQueryService,
+    TelemetrySummaryResponse,
+    create_telemetry_facade,
+    observe_graph_node,
+)
 from kindred.web.app import create_app
 from kindred.web.service import VisualStateProjector, derive_visual_source_id
 
@@ -56,6 +65,10 @@ _PUBLIC_DISTRIBUTIONS = {
 def test_public_life_assets_are_complete() -> None:
     assert len(list_registered_actions()) == 13
     assert len(list_registered_activities()) == 7
+
+
+def test_draw_credential_can_use_the_resident_secrets_file() -> None:
+    assert "KINDRED_CAPABILITY_DRAW_API_KEY" in SUPPORTED_SECRET_KEYS
 
 
 def test_portable_capability_entry_points_remain_loadable() -> None:
@@ -224,6 +237,34 @@ def test_public_runtime_configuration_keeps_typed_world_defaults() -> None:
     assert DEFAULT_CONFIG.world.weather_ttl_minutes > 0
 
 
+def test_local_telemetry_records_only_safe_runtime_shape(tmp_path: Path) -> None:
+    db_path = tmp_path / "kindred-telemetry.db"
+    telemetry = create_telemetry_facade(enabled=True, db_path=db_path, retention_days=30)
+    node = observe_graph_node("T1.sense.io", lambda state: {**state, "tick_id": 7})
+    try:
+        result = observed_invoke(
+            lambda: node({"private": "never persisted"}),
+            telemetry=telemetry,
+            run_kind="tick",
+            execution_mode="mock",
+            trigger_source="heartbeat",
+        )
+    finally:
+        telemetry.close()
+
+    assert result == {"private": "never persisted", "tick_id": 7}
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT run_kind, execution_mode, trigger_source, status, tick_id FROM run"
+        ).fetchone() == ("tick", "mock", "heartbeat", "succeeded", 7)
+        assert connection.execute("SELECT span_kind, name, status FROM span").fetchone() == (
+            "graph_node",
+            "T1.sense.io",
+            "succeeded",
+        )
+        assert "never persisted" not in "".join(connection.iterdump())
+
+
 def test_public_visual_state_foundation_is_stable_and_action_only() -> None:
     assert (DEFAULT_WEB_HOST, DEFAULT_WEB_PORT) == ("127.0.0.1", 8787)
     install_id = "synthetic-public-install"
@@ -303,6 +344,41 @@ def test_public_visual_state_v1_is_the_only_published_version_surface(tmp_path: 
         component_schemas[name]["additionalProperties"] is False
         for name in ("VisualStateEmptyV1", "VisualStateReadyV1", "VisualActionV1")
     )
+
+
+def test_public_observability_query_contract_is_read_only_and_api_scoped(
+    tmp_path: Path,
+) -> None:
+    telemetry_path = tmp_path / "missing" / "kindred-telemetry.db"
+    service = TelemetryQueryService(
+        telemetry_path,
+        cursor_key=b"public-observability-contract-key",
+    )
+    summary = service.summary("24h")
+    assert isinstance(summary, TelemetrySummaryResponse)
+    assert summary.empty is True
+    assert not telemetry_path.exists()
+
+    client = TestClient(
+        create_app(
+            db_path=tmp_path / "missing.db",
+            telemetry_db_path=telemetry_path,
+            telemetry_cursor_key=b"public-observability-contract-key",
+        )
+    )
+    openapi = client.get("/openapi.json").json()
+    paths = sorted(path for path in openapi["paths"] if "observability" in path)
+    assert paths == [
+        "/api/observability/runs",
+        "/api/observability/runs/{run_id}",
+        "/api/observability/summary",
+    ]
+    response = client.get("/api/observability/summary")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["empty"] is True
+    assert client.get("/observability/summary").status_code == 404
+    assert not telemetry_path.exists()
 
 
 def test_public_visual_state_http_contract_fails_closed_on_incomplete_schema(

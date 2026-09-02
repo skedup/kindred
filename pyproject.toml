@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kindred"
-version = "0.3.1"
+version = "0.4.0"
 description = "Autonomous AI resident runtime for OpenClaw and Hermes Mouth hosts"
 readme = "README.md"
 license = "Apache-2.0"
@@ -31,7 +31,7 @@ dependencies = [
   "kindred-capability-send>=0.1.0,<0.2",
   "click>=8.1",          # CLI
   "pydantic>=2.0",       # state 数据结构
-  "langgraph>=0.2",      # graph 编排（PoC 5/29 已验证可跑）
+  "langgraph==1.2.10",     # exact version: ContextVar propagation is a tested runtime contract
   "jinja2>=3.1",         # llm/prompts/ 模板
   "httpx>=0.25.2",       # HTTP-based LLM and Provider clients
   "pyyaml>=6.0",         # activity SKILL frontmatter 解析（docs/15）

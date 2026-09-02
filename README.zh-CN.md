@@ -7,7 +7,7 @@ Kindred 是一个连接既有 Mouth host 的自主 AI resident 运行时。它�
 中更新感知，可选择执行一个活动步骤，校验完整状态后再持久化。OpenClaw 或 Hermes 提供对话界面；
 Portable Capability package 可以在不修改核心 graph 的情况下增加外部工具。
 
-> **Public Preview：**`v0.3.1` 面向一台可信主机上的单 resident，适合愿意检查本地配置并
+> **Public Preview：**`v0.4.0` 面向一台可信主机上的单 resident，适合愿意检查本地配置并
 > 体验预发布软件的 operator。当前预览只支持全新安装，请使用全新用户/HOME；installer 会拒绝
 > 覆盖其他预览版本。
 
@@ -32,14 +32,14 @@ Portable Capability package 可以在不修改核心 graph 的情况下增加外
 
 ```sh
 curl -fsSL \
-  https://github.com/skedup/kindred/releases/download/v0.3.1/install.sh \
+  https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh \
   | sh
 ```
 
 也可以先检查脚本：
 
 ```sh
-curl -fLO https://github.com/skedup/kindred/releases/download/v0.3.1/install.sh
+curl -fLO https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh
 less install.sh
 sh install.sh
 ```
@@ -76,8 +76,15 @@ Hermes 支持保持 experimental：Kindred 只读消费已批准的 direct trans
 
 ## 数据边界
 
-Kindred 不增加 analytics、crash report 或诊断遥测，但功能性 provider 仍会接收完成工作
-所需的数据：
+Kindred 不会向外部服务发送 analytics、crash report 或诊断遥测。默认会在本地
+`life/data/kindred-telemetry.db` 记录不含内容的 token 数、耗时、状态，以及安全的
+Provider/stage/tool 标识；不会记录 prompt、response、tool 参数/结果、target 或 credential。
+可通过 `observability.enabled: false` 或 `KINDRED_OBSERVABILITY_ENABLED=false` 关闭。超过
+90 天的数据只做逻辑删除；SQLite 不会自动 VACUUM，这不等同于 secure erase。卸载会保留
+telemetry DB；停止 Kindred 后，operator 可手动删除这一明确文件。loopback Web server 通过只读
+`/api/observability/` API 提供不含内容的汇总与 run/span 明细；查询时不会创建或迁移该数据库。功能性
+provider 仍会接收
+完成工作所需的数据：
 
 - 配置的 LLM 会接收选定的 Persona 与运行上下文；
 - 地图 provider 会接收用于 world resolution 的 home address；
@@ -85,7 +92,7 @@ Kindred 不增加 analytics、crash report 或诊断遥测，但功能性 provid
 - operator 明确启用的 Capability 可能调用各自的 provider。
 
 Credential 和 resident 数据不会进入源码发行物。诊断输出只报告安全形状，不应展示消息、
-Persona、token、account 或 target 原值。
+Persona、credential、account 或 target 原值。
 
 ## 开发
 

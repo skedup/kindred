@@ -294,7 +294,10 @@ def test_production_graph_injects_one_relationship_authority_into_all_nodes(
     )
     config = load_kindred_config(
         env={},
-        overrides={"paths": {"db": tmp_path / "kindred.db", "character_card": card}},
+        overrides={
+            "paths": {"db": tmp_path / "kindred.db", "character_card": card},
+            "capabilities": {"xiaohongshu": {"enabled": False}},
+        },
     )
     dumper = PromptDumper(DebugDumpConfig(enabled=False, dump_dir=config.paths.debug_dump_dir))
     captured: dict[str, object] = {}

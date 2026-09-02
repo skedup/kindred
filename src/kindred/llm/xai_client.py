@@ -19,6 +19,7 @@ class XaiLlmClient(OpenAILlmClient):
     """Direct, non-streaming xAI client for ``POST /v1/responses``."""
 
     _PROVIDER_NAME = "xAI"
+    _TELEMETRY_PROVIDER = "xai"
     _CLIENT_NAME = "XaiLlmClient"
     _CLIENT_ERROR = XaiLlmClientError
     _API_KEY_ENV = "XAI_API_KEY"

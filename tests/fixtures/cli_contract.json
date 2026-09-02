@@ -2,7 +2,7 @@
   "baseline": {
     "click_version": "8.4.2",
     "prog_name": "kindred",
-    "source_commit": "b72301d3b47e2c177f174e6386449c9fcfc311fd",
+    "source_commit": "95083ee1a2f517a3f76c5db55363ad8d55047838",
     "terminal_width": 80
   },
   "command_tree": [
@@ -15,6 +15,7 @@
         "install",
         "inventory",
         "logs",
+        "memory",
         "run",
         "serve",
         "soul",
@@ -107,6 +108,24 @@
       "children": [],
       "kind": "command",
       "path": "logs"
+    },
+    {
+      "children": [
+        "search",
+        "sync"
+      ],
+      "kind": "group",
+      "path": "memory"
+    },
+    {
+      "children": [],
+      "kind": "command",
+      "path": "memory search"
+    },
+    {
+      "children": [],
+      "kind": "command",
+      "path": "memory sync"
     },
     {
       "children": [],
@@ -505,6 +524,81 @@
     },
     {
       "argv": [
+        "memory",
+        "--help"
+      ],
+      "exit_code": 0,
+      "name": "help:memory"
+    },
+    {
+      "argv": [
+        "memory",
+        "--__contract-invalid"
+      ],
+      "exit_code": 2,
+      "name": "invalid-option:memory"
+    },
+    {
+      "argv": [
+        "memory"
+      ],
+      "exit_code": 2,
+      "name": "missing-subcommand:memory"
+    },
+    {
+      "argv": [
+        "memory",
+        "__contract-invalid"
+      ],
+      "exit_code": 2,
+      "name": "unknown-subcommand:memory"
+    },
+    {
+      "argv": [
+        "memory",
+        "search",
+        "--help"
+      ],
+      "exit_code": 0,
+      "name": "help:memory search"
+    },
+    {
+      "argv": [
+        "memory",
+        "search",
+        "--__contract-invalid"
+      ],
+      "exit_code": 2,
+      "name": "invalid-option:memory search"
+    },
+    {
+      "argv": [
+        "memory",
+        "search"
+      ],
+      "exit_code": 2,
+      "name": "missing-argument:memory-search"
+    },
+    {
+      "argv": [
+        "memory",
+        "sync",
+        "--help"
+      ],
+      "exit_code": 0,
+      "name": "help:memory sync"
+    },
+    {
+      "argv": [
+        "memory",
+        "sync",
+        "--__contract-invalid"
+      ],
+      "exit_code": 2,
+      "name": "invalid-option:memory sync"
+    },
+    {
+      "argv": [
         "run",
         "--help"
       ],
@@ -749,7 +843,7 @@
     }
   ],
   "help": {
-    "": "Usage: kindred [OPTIONS] COMMAND [ARGS]...\n\n  Kindred — 一个能呼吸的 AI 伴侣框架。\n\n  呼吸 = SQLite 里真的有一行 tick 数据。\n\nOptions:\n  --version  Show the version and exit.\n  --help     Show this message and exit.\n\nCommands:\n  card       Character Card 管理子命令组。\n  db         数据库管理子命令组。\n  doctor     诊断本地 Resident；--online 额外验证 Gateway 与 Heart LLM。\n  dream      做梦子命令组（清晨 04:00 daemon 触发；run 用于手动测试）。\n  install    Create or reconnect one Resident to an existing Mouth host.\n  inventory  运行期私有物品名册管理。\n  logs       读取 Kindred-owned Heart/Web 平台日志。\n  run        启动 daemon（常驻心跳）。\n  serve      启动 web 后端：只读可视化（观察 ta 的生活）。\n  soul       灵魂演化管理子命令组（做梦产物：snapshots / rollback）。\n  start      启动 Kindred-owned Heart/Web 平台服务。\n  status     显示 Kindred-owned Heart/Web 平台服务状态。\n  stop       停止 Kindred-owned Heart/Web 平台服务。\n  tick       跑一次 tick（一次性命令）。\n  uninstall  Disconnect exact-owned host wiring while retaining the Resident.\n",
+    "": "Usage: kindred [OPTIONS] COMMAND [ARGS]...\n\n  Kindred — 一个能呼吸的 AI 伴侣框架。\n\n  呼吸 = SQLite 里真的有一行 tick 数据。\n\nOptions:\n  --version  Show the version and exit.\n  --help     Show this message and exit.\n\nCommands:\n  card       Character Card 管理子命令组。\n  db         数据库管理子命令组。\n  doctor     诊断本地 Resident；--online 额外验证 Gateway 与 Heart LLM。\n  dream      做梦子命令组（清晨 04:00 daemon 触发；run 用于手动测试）。\n  install    Create or reconnect one Resident to an existing Mouth host.\n  inventory  运行期私有物品名册管理。\n  logs       读取 Kindred-owned Heart/Web 平台日志。\n  memory     Episode 记忆派生索引命令。\n  run        启动 daemon（常驻心跳）。\n  serve      启动 web 后端：只读可视化（观察 ta 的生活）。\n  soul       灵魂演化管理子命令组（做梦产物：snapshots / rollback）。\n  start      启动 Kindred-owned Heart/Web 平台服务。\n  status     显示 Kindred-owned Heart/Web 平台服务状态。\n  stop       停止 Kindred-owned Heart/Web 平台服务。\n  tick       跑一次 tick（一次性命令）。\n  uninstall  Disconnect exact-owned host wiring while retaining the Resident.\n",
     "card": "Usage: kindred card [OPTIONS] COMMAND [ARGS]...\n\n  Character Card 管理子命令组。\n\nOptions:\n  --help  Show this message and exit.\n\nCommands:\n  activate  激活 card manifest，让 home 等实例级设置进入 runtime。\n",
     "card activate": "Usage: kindred card activate [OPTIONS] CARD_DIR\n\n  激活 card manifest，让 home 等实例级设置进入 runtime。\n\n  本命令只复制 ``card.yaml`` 到 ``paths.character_card``，用于把 full card 的 ``home`` 暴露给\n  LocationProvider / act prompt。它**不**覆盖 SOUL、不写 DB、 不处理 seed_state；完整搬家 install\n  另行实现。\n\nOptions:\n  --config FILE          Kindred YAML 配置路径（默认 conf/kindred.yaml，也可用\n                         KINDRED_CONFIG）\n  --life-root DIRECTORY  life 根目录；未显式配置时派生 runtime character-card 路径\n  --force                覆盖已有 runtime character-card（不会覆盖 SOUL/DB）\n  --help                 Show this message and exit.\n",
     "db": "Usage: kindred db [OPTIONS] COMMAND [ARGS]...\n\n  数据库管理子命令组。\n\nOptions:\n  --help  Show this message and exit.\n\nCommands:\n  bootstrap  种 1 行 cold_start tick——给空库一个起点。\n  migrate    应用 schema.sql 到数据库（幂等）。\n  status     查询数据库状态（schema 版本 + tick / thought / episode_recall /...\n",
@@ -764,6 +858,9 @@
     "inventory add": "Usage: kindred inventory add [OPTIONS] PRIVATE_FILE\n\n  从私有 YAML 向现有 Catalog 原子追加物品。\n\nOptions:\n  --config FILE\n  --life-root DIRECTORY\n  --help                 Show this message and exit.\n",
     "inventory import": "Usage: kindred inventory import [OPTIONS] PRIVATE_FILE\n\n  从私有 YAML 向空 Catalog 做一次原子初始化。\n\nOptions:\n  --config FILE\n  --life-root DIRECTORY\n  --help                 Show this message and exit.\n",
     "logs": "Usage: kindred logs [OPTIONS]\n\n  读取 Kindred-owned Heart/Web 平台日志。\n\nOptions:\n  --service [heart|web]\n  --follow               持续跟随日志\n  --lines INTEGER RANGE  [default: 200; 1<=x<=10000]\n  --help                 Show this message and exit.\n",
+    "memory": "Usage: kindred memory [OPTIONS] COMMAND [ARGS]...\n\n  Episode 记忆派生索引命令。\n\nOptions:\n  --help  Show this message and exit.\n\nCommands:\n  search  只读检索已完成同步的 Episode 派生索引。\n  sync    从已提交 canonical Episode 显式同步派生检索索引。\n",
+    "memory search": "Usage: kindred memory search [OPTIONS] QUERY\n\n  只读检索已完成同步的 Episode 派生索引。\n\nOptions:\n  --config FILE                   Kindred YAML 配置路径（默认 conf/kindred.yaml，也可用\n                                  KINDRED_CONFIG）\n  --life-root DIRECTORY           life 根目录；未显式 --db/--index 时派生数据库路径。\n  --db FILE                       可选 canonical Kindred SQLite 路径，仅用于报告索引\n                                  freshness。\n  --index FILE                    派生 memory index 路径（默认 <life-root>/data/memory-\n                                  index.db）。\n  --top-k INTEGER RANGE           [default: 3; 1<=x<=5]\n  --token-budget INTEGER RANGE    [default: 800; 128<=x<=1200]\n  --time-order [relevance|earliest|latest]\n                                  [default: relevance]\n  --activity TEXT                 canonical Activity name 精确过滤。\n  --location TEXT                 canonical Location name/city/address 精确过滤。\n  --occurred-after TEXT           occurred_at 下界（包含）。\n  --occurred-before TEXT          occurred_at 上界（包含）。\n  --help                          Show this message and exit.\n",
+    "memory sync": "Usage: kindred memory sync [OPTIONS]\n\n  从已提交 canonical Episode 显式同步派生检索索引。\n\nOptions:\n  --config FILE          Kindred YAML 配置路径（默认 conf/kindred.yaml，也可用\n                         KINDRED_CONFIG）\n  --life-root DIRECTORY  life 根目录；未显式 --db/--index 时派生数据库路径。\n  --db FILE              canonical Kindred SQLite 路径（CLI override）。\n  --index FILE           派生 memory index 路径（默认 <life-root>/data/memory-\n                         index.db）。\n  --rebuild              按当前投影/catalog 规则原子替换全部 Episode 索引。\n  --help                 Show this message and exit.\n",
     "run": "Usage: kindred run [OPTIONS]\n\n  启动 daemon（常驻心跳）。\n\n  earlier milestone：纯 in-process 自循环——按 HeartbeatScheduler 节奏（醒 5min / 睡 1h） 循环\n  invoke tick_graph，cold_start 首 tick 立即对齐 state，SIGTERM graceful。 尚不含\n  watcher（你说话→心感知）/ ws push / dream，见 docs/13 后续刀。\n\nOptions:\n  --config FILE                   Kindred YAML 配置路径（默认 conf/kindred.yaml，也可用\n                                  KINDRED_CONFIG）\n  --life-root DIRECTORY           life 根目录\n  --log-level [debug|info|warning|error|critical]\n                                  覆盖 logging.level\n  --debug-dump-dir DIRECTORY      开启 prompt debug dump 并写入指定目录（含\n                                  SOUL/对话/prompt，敏感）\n  --debug-dump                    开启 prompt debug dump，使用配置中的 dump_dir（默认\n                                  life/debug，敏感）\n  --help                          Show this message and exit.\n",
     "serve": "Usage: kindred serve [OPTIONS]\n\n  启动 web 后端：只读可视化（观察 ta 的生活）。\n\n  挂只读投影 ``/healthz`` / ``/now`` / ``/stream`` / ``/episodes`` /\n  ``/interior/history`` / ``/artifacts`` / ``/api/visual-state``，绝不写库\n  （``mode=ro``）。 需要 web extra：``pip install kindred[web]``。\n\nOptions:\n  --config FILE          Kindred YAML 配置路径（默认 conf/kindred.yaml，也可用\n                         KINDRED_CONFIG）\n  --life-root DIRECTORY  life 根目录；未显式 --db 时派生 SQLite 路径\n  --db FILE              SQLite 数据库路径（CLI override，优先级最高）。\n  --host TEXT            监听地址（覆盖 web.host）\n  --port INTEGER         监听端口（覆盖 web.port）\n  --help                 Show this message and exit.\n",
     "soul": "Usage: kindred soul [OPTIONS] COMMAND [ARGS]...\n\n  灵魂演化管理子命令组（做梦产物：snapshots / rollback）。\n\nOptions:\n  --help  Show this message and exit.\n\nCommands:\n  list-snapshots  列出可用的灵魂快照时间戳（按时间序）。\n  rollback        把灵魂回滚到某次做梦前的状态（不依赖 git，docs §8.3）。\n",

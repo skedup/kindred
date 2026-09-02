@@ -70,6 +70,21 @@ class KindredDebugConfig:
 
 
 @dataclass(frozen=True)
+class KindredObservabilityConfig:
+    """Content-free local telemetry controls.
+
+    Enabled by default after OBS3 production graph/provider integration passed
+    equivalence and performance gates. Prompt/debug payload capture remains separate.
+    """
+
+    enabled: bool
+    retention_days: int
+    daily_token_warn: int | None
+    tick_duration_warn_seconds: float | None
+    dream_duration_warn_seconds: float | None
+
+
+@dataclass(frozen=True)
 class KindredDaemonConfig:
     """Daemon runtime settings.
 
@@ -182,6 +197,7 @@ class KindredConfig:
     llm: KindredLlmConfig
     logging: KindredLoggingConfig
     debug: KindredDebugConfig
+    observability: KindredObservabilityConfig
     daemon: KindredDaemonConfig
     gateway: KindredGatewayConfig
     mouth_host: HostRuntimeModel | None

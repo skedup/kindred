@@ -12,16 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from kindred.activity.action import list_registered_actions, load_atomic_action
-from kindred.activity.skill import list_registered_activities, load_activity_skill
 from kindred.adapters.openclaw.device_identity import DeviceIdentity
 from kindred.adapters.openclaw.gateway import GatewayClient
 from kindred.capability_host.discovery import discover_enabled_contributions
 from kindred.capability_host.facts import ACTIVITY_CURRENT_FACT, ARTIFACT_EXPLICIT_REFS_FACT
+from kindred.capability_host.resources import PackageResourceError, load_runtime_life_assets
 from kindred.config import KindredConfig, load_kindred_config, read_secrets_file
 from kindred.db import KindredDB
 from kindred.inventory.facts import INVENTORY_CHOICE_CONTEXT_FACT
-from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
 from kindred.llm.client import ToolCapableLlmClient
 from kindred.llm.factory import build_llm_client
 from kindred.mouth_host.model import HermesRuntimeModel, OpenClawRuntimeModel
@@ -277,21 +275,11 @@ def _check_plugin() -> None:
 
 
 def _life_assets() -> str:
-    actions, activities = list_registered_actions(), list_registered_activities()
-    expected_actions = sorted(path.name for path in ACTIONS_DIR.iterdir() if path.is_dir())
-    expected_activities = sorted(path.name for path in ACTIVITIES_DIR.iterdir() if path.is_dir())
-    if (
-        not actions
-        or not activities
-        or actions != expected_actions
-        or activities != expected_activities
-    ):
-        raise _Fail("Activity/Action wheel 资产缺失或不完整")
-    for name in actions:
-        load_atomic_action(name)
-    for name in activities:
-        load_activity_skill(name)
-    return "Activity/Action wheel 资产可完整严格加载"
+    try:
+        load_runtime_life_assets()
+    except PackageResourceError as exc:
+        raise _Fail("稳定 runtime-assets 缺失、损坏或与已安装 wheel 不一致") from exc
+    return "稳定 runtime-assets 与已安装 wheel 闭包一致"
 
 
 def _capabilities(context: _Context) -> tuple[Status, str]:

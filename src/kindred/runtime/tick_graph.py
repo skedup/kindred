@@ -70,7 +70,6 @@ def build_client_tick_graph(
         INVENTORY_CHOICE_CONTEXT_FACT,
         build_inventory_choice_context,
     )
-    from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
     from kindred.llm.client import ToolCapableLlmClient
     from kindred.location.capability import (
         LOCATION_PROVIDER_DEPENDENCY,
@@ -133,7 +132,7 @@ def build_client_tick_graph(
         sense_llm_node=make_sense_llm_node(
             client,
             db,
-            activities_dir=ACTIVITIES_DIR,
+            activities_dir=host_runtime.activities_dir,
             soul_excerpt_path=paths.soul_excerpt,
             soul_full_path=paths.soul_full,
             identity_path=paths.identity,
@@ -144,8 +143,8 @@ def build_client_tick_graph(
         ),
         act_llm_node=make_act_llm_node(
             client,
-            activities_dir=ACTIVITIES_DIR,
-            actions_dir=ACTIONS_DIR,
+            activities_dir=host_runtime.activities_dir,
+            actions_dir=host_runtime.actions_dir,
             host_runtime=host_runtime,
             prompt_dumper=prompt_dumper,
             home=home,

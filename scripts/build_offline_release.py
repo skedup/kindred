@@ -6,6 +6,7 @@ import email
 import gzip
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -41,6 +42,7 @@ def _load_inputs(root: Path) -> dict[str, Any]:
     if len(root_rows) != 1 or root_rows[0][1:4] != [version, ".", expected_wheel]:
         raise ReleaseBuildError("release version does not match the root wheel")
     _validate_mouth_hosts(value.get("mouth_hosts"), set(value.get("platforms", {})))
+    _validate_xhs(value.get("xiaohongshu"), set(value.get("platforms", {})))
     return value
 
 
@@ -85,6 +87,53 @@ def _valid_host_profile(kind: str, profile: dict[str, object]) -> bool:
     return all(type(profile[key]) is str and bool(profile[key]) for key in ("release", "package"))
 
 
+def _validate_xhs(value: object, platforms: set[str]) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "source_sha",
+        "release_tag",
+        "wheel",
+        "sidecars",
+    }:
+        raise ReleaseBuildError("Xiaohongshu release identity is invalid")
+    wheel = value["wheel"]
+    sidecars = value["sidecars"]
+    if not (
+        isinstance(value["source_sha"], str)
+        and re.fullmatch(r"[0-9a-f]{40}", value["source_sha"])
+        and value["release_tag"] == "kindred-xhs-v0.3.3"
+        and isinstance(wheel, list)
+        and len(wheel) == 6
+        and wheel[:3]
+        == [
+            "kindred-capability-xiaohongshu",
+            "0.3.3",
+            "kindred_capability_xiaohongshu-0.3.3-py3-none-any.whl",
+        ]
+        and _valid_frozen_file(wheel[3], wheel[4])
+        and wheel[5] == "MIT"
+        and isinstance(sidecars, dict)
+        and set(sidecars) == platforms
+        and all(
+            isinstance(row, list)
+            and len(row) == 6
+            and row[1] == "2.7.2"
+            and _valid_frozen_file(row[2], row[3])
+            and row[4:] == ["MIT", 1]
+            for row in sidecars.values()
+        )
+    ):
+        raise ReleaseBuildError("Xiaohongshu release identity is invalid")
+
+
+def _valid_frozen_file(size: object, digest: object) -> bool:
+    return (
+        type(size) is int
+        and size > 0
+        and isinstance(digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
+    )
+
+
 def _verify(path: Path, *, size: int | None = None, digest: str) -> None:
     if (
         not path.is_file()
@@ -96,8 +145,9 @@ def _verify(path: Path, *, size: int | None = None, digest: str) -> None:
 
 
 def _run(argv: list[str], *, cwd: Path) -> str:
+    env = {**os.environ, "PNPM_CONFIG_OFFLINE": "true", "UV_OFFLINE": "true"}
     try:
-        result = subprocess.run(argv, cwd=cwd, check=True, capture_output=True, text=True)
+        result = subprocess.run(argv, cwd=cwd, env=env, check=True, capture_output=True, text=True)
     except (OSError, subprocess.CalledProcessError) as exc:
         raise ReleaseBuildError("release build command failed") from exc
     return result.stdout.strip()
@@ -169,6 +219,46 @@ def _tar_bundle(source: Path, destination: Path) -> None:
                         archive.addfile(info)
 
 
+def _validate_sidecar(
+    source: Path,
+    identity: list[Any],
+    platform: str,
+    source_sha: str,
+) -> None:
+    filename, version, size, digest, license_id, service_api_version = identity
+    _verify(source, size=size, digest=digest)
+    expected_root = filename.removesuffix(".tar.gz")
+    try:
+        with tarfile.open(source, "r:gz") as archive:
+            members = archive.getmembers()
+            for member in members:
+                path = Path(member.name)
+                if (
+                    path.is_absolute()
+                    or ".." in path.parts
+                    or not path.parts
+                    or path.parts[0] != expected_root
+                    or not (member.isdir() or member.isfile())
+                ):
+                    raise ReleaseBuildError("Xiaohongshu sidecar archive is unsafe")
+            info = archive.getmember(f"{expected_root}/manifest.json")
+            stream = archive.extractfile(info)
+            if stream is None:
+                raise ReleaseBuildError("Xiaohongshu sidecar manifest is unreadable")
+            manifest = json.load(stream)
+    except (KeyError, OSError, tarfile.TarError, json.JSONDecodeError) as exc:
+        raise ReleaseBuildError("Xiaohongshu sidecar archive is unreadable") from exc
+    expected_target = "macos-arm64" if platform == "macos-arm64" else "ubuntu-24.04-x86_64"
+    if (
+        manifest.get("version") != version
+        or manifest.get("source_sha") != source_sha
+        or manifest.get("target") != expected_target
+        or str(manifest.get("service_api_version")) != str(service_api_version)
+        or license_id != "MIT"
+    ):
+        raise ReleaseBuildError("Xiaohongshu sidecar identity mismatch")
+
+
 def _plugin_checksum(root: Path) -> str:
     return _tree_checksum(root / "src/kindred/openclaw/mouth_plugin")
 
@@ -222,6 +312,7 @@ def _hermes_plugin_version(root: Path) -> str:
 def _notices(inputs: dict[str, Any], wheels: list[dict[str, Any]]) -> str:
     rows = {(item["distribution"], item["version"], item["license"]) for item in wheels}
     rows.update(tuple(item) for item in inputs["web_runtime"])
+    rows.add(("kindred-xhs-sidecar", inputs["xiaohongshu"]["sidecars"]["macos-arm64"][1], "MIT"))
     packages = "".join(
         f"{name} {version} | {license_id}\n" for name, version, license_id in sorted(rows)
     )
@@ -281,6 +372,17 @@ def _sbom(inputs: dict[str, Any], platforms: dict[str, Any]) -> dict[str, Any]:
             )
             for index, wheel in enumerate(data["wheels"])
         )
+        sidecar = data["xiaohongshu_sidecar"]
+        packages.append(
+            _spdx_package(
+                f"kindred-xhs-sidecar-{platform}",
+                f"SPDXRef-xhs-sidecar-{platform}",
+                sidecar["version"],
+                sidecar["license"],
+                source=f"git+https://github.com/skedup/hi_x_h_5@{inputs['xiaohongshu']['source_sha']}",
+                checksums=[{"algorithm": "SHA256", "checksumValue": sidecar["sha256"]}],
+            )
+        )
     packages.extend(
         _spdx_package(name, f"SPDXRef-web-{index}", version, license_id)
         for index, (name, version, license_id) in enumerate(inputs["web_runtime"])
@@ -312,6 +414,10 @@ def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="kindred-release-") as temporary:
         temp = Path(temporary)
         first_party = _build_first_party(root, temp / "first-party", inputs)
+        xhs = inputs["xiaohongshu"]
+        xhs_wheel_row = xhs["wheel"]
+        xhs_wheel = cache / "external" / xhs_wheel_row[2]
+        _verify(xhs_wheel, size=xhs_wheel_row[3], digest=xhs_wheel_row[4])
         platform_manifest: dict[str, Any] = {}
         all_wheels: list[dict[str, Any]] = []
         for platform, platform_input in inputs["platforms"].items():
@@ -337,6 +443,21 @@ def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
             for wheel in first_party:
                 shutil.copy2(wheel, wheelhouse / wheel.name)
                 records.append(_wheel_record(wheel, "base", licenses))
+            shutil.copy2(xhs_wheel, wheelhouse / xhs_wheel.name)
+            xhs_record = _wheel_record(xhs_wheel, "base", licenses)
+            if (
+                xhs_record["distribution"] != xhs_wheel_row[0]
+                or xhs_record["version"] != xhs_wheel_row[1]
+                or xhs_record["license"] != xhs_wheel_row[5]
+            ):
+                raise ReleaseBuildError("Xiaohongshu wheel metadata mismatch")
+            records.append(xhs_record)
+            sidecar_row = xhs["sidecars"][platform]
+            sidecar_source = cache / "external" / sidecar_row[0]
+            _validate_sidecar(sidecar_source, sidecar_row, platform, xhs["source_sha"])
+            services = stage / "services"
+            services.mkdir()
+            shutil.copy2(sidecar_source, services / "xhs-mcp-sidecar.tar.gz")
             shutil.copy2(python_archive, stage / "python-runtime.tar.gz")
             bundle_name = f"kindred-v{inputs['release_version']}-{platform}.tar.gz"
             bundle = output / bundle_name
@@ -358,6 +479,14 @@ def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
                     "sha256": _sha256(bundle),
                 },
                 "wheels": records,
+                "xiaohongshu_sidecar": {
+                    "version": sidecar_row[1],
+                    "filename": sidecar_row[0],
+                    "size": sidecar_row[2],
+                    "sha256": sidecar_row[3],
+                    "license": sidecar_row[4],
+                    "service_api_version": sidecar_row[5],
+                },
             }
             all_wheels.extend(records)
         web = json.loads((root / "src/kindred/web/static/kindred-web-build.json").read_text())
@@ -366,7 +495,14 @@ def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
             "release_version": inputs["release_version"],
             "mouth_hosts": inputs["mouth_hosts"],
             "build_tools": inputs["build_tools"],
-            "life_assets": {"actions": 13, "activities": 7},
+            "life_assets": {"actions": 15, "activities": 8},
+            "xiaohongshu": {
+                "source_sha": xhs["source_sha"],
+                "release_tag": xhs["release_tag"],
+                "wheel": xhs_record,
+                "enabled_by_default": True,
+                "write_mode": "none",
+            },
             "mouth_plugins": {
                 "openclaw": {
                     "version": _plugin_version(root),

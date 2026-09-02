@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from kindred_capability_sdk import (
@@ -17,8 +18,9 @@ from kindred_capability_sdk import (
 )
 
 ACTIVITY_FACT = "activity.current"
+ROUTES_FACT = "artifact.profile_routes"
 OUTBOUND_PROFILE = "kindred.compose.outbound.v1"
-_SAFE_SOURCE_REF_KINDS = frozenset({"feed", "memory", "plain", "tick"})
+_OUTBOUND_SOURCE_REF_KINDS = frozenset({"feed", "memory", "plain", "tick"})
 _RISK_TERMS = (
     "测试",
     "探针",
@@ -61,6 +63,17 @@ WRITE_COMPOSE = ToolDef(
 )
 
 
+@dataclass(frozen=True)
+class _Route:
+    selector_capability: str
+    profile: str
+    member_paths: Mapping[str, str]
+    source_ref_kinds: frozenset[str]
+
+
+_OUTBOUND_ROUTE = _Route("send", OUTBOUND_PROFILE, {}, _OUTBOUND_SOURCE_REF_KINDS)
+
+
 def create_capability(
     *,
     settings: Mapping[str, Any],
@@ -72,8 +85,8 @@ def create_capability(
 
     def handle(call: ToolCall, context: InvocationContext) -> CapabilityResult:
         try:
+            route = _route_for_activity(context)
             content, title, source_refs, tone = _parse_args(call.args)
-            profile = _profile_for_activity(context)
         except ValueError as exc:
             return CapabilityResult(
                 ToolResult.error(call, error_type="InvalidRequest", message=str(exc))
@@ -88,8 +101,11 @@ def create_capability(
                 )
             )
         files = {"content.md": content}
+        title_member = route.member_paths.get("title")
+        if title_member is not None and title is not None:
+            files[title_member] = title
         try:
-            writer.stage_bundle(profile, files)
+            writer.stage_bundle(route.profile, files)
         except Exception:
             return CapabilityResult(
                 ToolResult.error(
@@ -105,11 +121,14 @@ def create_capability(
                 {
                     "ok": True,
                     "status": "staged",
-                    "profile": profile,
+                    "profile": route.profile,
                     "content_len": len(content),
                     "title_len": len(title) if title is not None else None,
                     "source_refs_count": len(source_refs),
-                    "source_ref_kinds": _source_ref_kinds(source_refs),
+                    "source_ref_kinds": _source_ref_kinds(
+                        source_refs,
+                        route.source_ref_kinds,
+                    ),
                     "tone_present": tone is not None,
                     "risk_flags": list(risk_flags),
                 },
@@ -124,7 +143,9 @@ def create_capability(
     )
 
 
-def _parse_args(args: Mapping[str, Any]) -> tuple[str, str | None, tuple[str, ...], str | None]:
+def _parse_args(
+    args: Mapping[str, Any],
+) -> tuple[str, str | None, tuple[str, ...], str | None]:
     if set(args) - {"title", "content", "source_refs", "tone"}:
         raise ValueError("unexpected compose arguments")
     content = args.get("content")
@@ -142,27 +163,60 @@ def _parse_args(args: Mapping[str, Any]) -> tuple[str, str | None, tuple[str, ..
     return content.strip(), title, refs, tone
 
 
-def _profile_for_activity(context: InvocationContext) -> str:
+def _route_for_activity(context: InvocationContext) -> _Route:
     fact = context.fact(ACTIVITY_FACT)
     raw = fact.value.get("capabilities") if fact is not None else None
     capabilities = frozenset(raw) if isinstance(raw, (tuple, list)) else frozenset()
-    if "send" in capabilities:
-        return OUTBOUND_PROFILE
-    raise ValueError("current activity does not define an outbound compose route")
+    routes = (_OUTBOUND_ROUTE, *_external_routes(context))
+    matched = tuple(route for route in routes if route.selector_capability in capabilities)
+    if len(matched) != 1:
+        raise ValueError("current activity does not define exactly one compose route")
+    return matched[0]
+
+
+def _external_routes(context: InvocationContext) -> tuple[_Route, ...]:
+    fact = context.fact(ROUTES_FACT)
+    raw_routes = fact.value.get("routes") if fact is not None else None
+    if raw_routes is None:
+        return ()
+    if not isinstance(raw_routes, tuple):
+        raise ValueError("artifact profile routes are invalid")
+    routes: list[_Route] = []
+    for raw in raw_routes:
+        if not isinstance(raw, Mapping):
+            raise ValueError("artifact profile route is invalid")
+        selector = raw.get("selector_capability")
+        profile = raw.get("profile")
+        members = raw.get("member_paths")
+        kinds = raw.get("source_ref_kinds")
+        if (
+            not isinstance(selector, str)
+            or not isinstance(profile, str)
+            or not isinstance(members, Mapping)
+            or not isinstance(kinds, tuple)
+            or not all(isinstance(item, str) for item in kinds)
+        ):
+            raise ValueError("artifact profile route is invalid")
+        routes.append(_Route(selector, profile, members, frozenset(kinds)))
+    return tuple(routes)
 
 
 def _optional_text(value: Any) -> str | None:
     return value.strip() or None if isinstance(value, str) else None
 
 
-def _source_ref_kinds(refs: tuple[str, ...]) -> list[str]:
+def _source_ref_kinds(refs: tuple[str, ...], allowed: frozenset[str]) -> list[str]:
     kinds: list[str] = []
     for ref in refs:
-        prefix = ref.split(":", 1)[0].strip().lower() if ":" in ref else "plain"
-        kind = prefix if prefix in _SAFE_SOURCE_REF_KINDS else "other"
+        raw = _source_ref_kind(ref)
+        kind = raw if raw in allowed else "other"
         if kind not in kinds:
             kinds.append(kind)
     return kinds
+
+
+def _source_ref_kind(ref: str) -> str:
+    return ref.split(":", 1)[0].strip().lower() if ":" in ref else "plain"
 
 
 def _risk_flags(title: str | None, content: str) -> tuple[str, ...]:

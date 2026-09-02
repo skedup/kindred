@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from kindred.telemetry import observe_tool_call, record_unknown_tool
 from kindred_capability_sdk import ToolCall as _ToolCall
 from kindred_capability_sdk import ToolDef as _ToolDef
 from kindred_capability_sdk import ToolEffect as _ToolEffect
@@ -49,24 +50,48 @@ class ToolHandler(Protocol):
         ...
 
 
-def call_tool_handler(handler: ToolHandler, call: _ToolCall) -> _ToolResult:
+def call_tool_handler(
+    handler: ToolHandler,
+    call: _ToolCall,
+    *,
+    tool_def: _ToolDef,
+    round_index: int,
+) -> _ToolResult:
     """执行 handler；handler 抛错时包成 error ToolResult 回灌给模型。
 
     异常 message 可能含敏感上下文，这里只回灌类型与固定说明。真正业务 handler
     若想给模型更细错误，可主动返回 ``ToolResult(is_error=True, ...)``。
     """
 
+    observation = observe_tool_call(tool_def, round_index)
     try:
         result = handler(call)
     except Exception as exc:  # noqa: BLE001 - tool-loop contract: errors become ToolResult
+        observation.finish(error_type="ToolHandlerException")
         return _ToolResult.error(
             call,
             error_type=type(exc).__name__,
             message="handler raised",
         )
-    if result.call_id is None and call.call_id is not None:
-        return result.with_call_id(call.call_id)
-    return result
+    try:
+        if result.call_id is None and call.call_id is not None:
+            result = result.with_call_id(call.call_id)
+        observation.finish(error_type="ToolResultError" if result.is_error else None)
+        return result
+    except BaseException:
+        observation.finish(error_type="ToolResultError")
+        raise
+
+
+def unknown_tool_result(call: _ToolCall, *, round_index: int) -> _ToolResult:
+    """Return the shared rejection and record no model-generated tool name."""
+
+    record_unknown_tool(round_index)
+    return _ToolResult.error(
+        call,
+        error_type="UnknownTool",
+        message="tool is not registered",
+    )
 
 
 def effect_for_tool(tools: dict[str, _ToolDef], name: str) -> _ToolEffect | None:
@@ -120,4 +145,5 @@ __all__ = [
     "effect_for_tool",
     "render_tool_contract",
     "tool_map",
+    "unknown_tool_result",
 ]

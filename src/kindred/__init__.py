@@ -22,4 +22,4 @@
 - adapters/ 双向：runtime 调它发消息，它也接收外部 webhook
 """
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
