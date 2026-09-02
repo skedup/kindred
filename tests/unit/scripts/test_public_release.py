@@ -397,7 +397,7 @@ def test_zip_tar_xz_and_nested_archives_are_scanned_safely(tmp_path: Path) -> No
         archive.writestr(info, "target")
 
     findings = release.scan_path(outer, {"schema_version": 1})
-    assert {finding.rule_id for finding in findings} >= {"private_platform", "archive_path"}
+    assert {finding.rule_id for finding in findings} == {"archive_path"}
 
     tar_path = tmp_path / "unsafe.tar.xz"
     with tarfile.open(tar_path, "w:xz") as archive:
@@ -678,7 +678,7 @@ def test_common_ci_identity_words_are_not_sensitive_content(tmp_path: Path) -> N
 
 def test_redaction_exception_is_digest_pinned(tmp_path: Path) -> None:
     release = _load_module()
-    source = "rule fixture: " + "x" + "hs"
+    source = "internal review !" + "123"
     sample = tmp_path / "sample.py"
     sample.write_text(source, encoding="utf-8")
     policy = {
@@ -686,7 +686,7 @@ def test_redaction_exception_is_digest_pinned(tmp_path: Path) -> None:
         "redaction_exceptions": [
             {
                 "path": "sample.py",
-                "rule_ids": ["private_platform"],
+                "rule_ids": ["internal_review"],
                 "sha256": hashlib.sha256(source.encode()).hexdigest(),
             }
         ],
@@ -694,4 +694,4 @@ def test_redaction_exception_is_digest_pinned(tmp_path: Path) -> None:
 
     assert release.scan_path(sample, policy) == ()
     sample.write_text(source + "\nchanged", encoding="utf-8")
-    assert {item.rule_id for item in release.scan_path(sample, policy)} == {"private_platform"}
+    assert {item.rule_id for item in release.scan_path(sample, policy)} == {"internal_review"}

@@ -36,6 +36,7 @@ from kindred.cli_dream import (  # noqa: F401
     dream_run,
 )
 from kindred.cli_inventory import inventory, inventory_add, inventory_import  # noqa: F401
+from kindred.cli_memory import memory, memory_search, memory_sync  # noqa: F401
 from kindred.cli_serve import serve
 from kindred.cli_soul import (  # noqa: F401
     _soul_layout,
@@ -72,6 +73,7 @@ for command in (
     status,
     logs,
     db,
+    memory,
     inventory,
     card,
     soul,

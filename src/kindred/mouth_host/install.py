@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import click
 
+from kindred.capability_host.resources import PackageResourceError, materialize_runtime_assets
 from kindred.config import KindredConfigError, load_kindred_config
 from kindred.hermes.binding import HermesBindingError
 from kindred.hermes.install import (
@@ -37,6 +41,7 @@ def install() -> None:
     if not sys.stdin.isatty():
         raise click.ClickException("controlling TTY required; run kindred install in a terminal")
     try:
+        materialize_runtime_assets()
         kind, candidate = _select_host(_discover_hosts())
         _confirm_data_flows(kind)
         config_path = _config_path()
@@ -50,6 +55,7 @@ def install() -> None:
         from kindred.openclaw.doctor import require_doctor_ready
 
         require_doctor_ready(config_path)
+        _install_xhs_service(config_path)
         _install_platform_services(config_path)
     except Exception as exc:
         if isinstance(exc, click.ClickException):
@@ -123,7 +129,38 @@ def _confirm_data_flows(kind: str) -> None:
 
 
 def _config_path() -> Path:
+    if configured := os.environ.get("KINDRED_CONFIG"):
+        return Path(configured).expanduser()
     return openclaw._config_home() / "kindred/config.yaml"
+
+
+def _install_xhs_service(config_path: Path) -> None:
+    operator = Path(sys.prefix).resolve().parent / "services/xhs-mcp/bin/kindred-xhs"
+    if not operator.is_file() or operator.is_symlink() or not os.access(operator, os.X_OK):
+        raise MouthHostInstallError("Xiaohongshu sidecar operator is unavailable")
+    config = load_kindred_config(config_path, load_secrets=False)
+    try:
+        mcp_url = config.capabilities["xiaohongshu"].settings["mcp_url"]
+        port = urlsplit(mcp_url).port
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MouthHostInstallError("Xiaohongshu sidecar endpoint is invalid") from exc
+    if port is None:
+        raise MouthHostInstallError("Xiaohongshu sidecar endpoint must include a port")
+    env = {
+        **os.environ,
+        "XHS_MCP_DATA_DIR": str(config.paths.life_root / "state/xiaohongshu"),
+        "XHS_MCP_PORT": str(port),
+    }
+    try:
+        subprocess.run(
+            [str(operator), "install-service"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise MouthHostInstallError("Xiaohongshu sidecar service installation failed") from exc
 
 
 def _safe_failure(operation: str, exc: Exception) -> str:
@@ -133,6 +170,7 @@ def _safe_failure(operation: str, exc: Exception) -> str:
         MouthHostInstallError,
         OpenClawBindingError,
         OpenClawInstallError,
+        PackageResourceError,
     )
     if isinstance(exc, safe_errors) or (
         isinstance(exc, KindredConfigError)

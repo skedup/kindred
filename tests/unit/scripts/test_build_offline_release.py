@@ -51,11 +51,36 @@ def _python_archive(path: Path) -> Path:
     return archive
 
 
+def _sidecar(path: Path, platform: str, source_sha: str) -> Path:
+    target = "macos-arm64" if platform == "macos-arm64" else "ubuntu-24.04-x86_64"
+    name = f"kindred-xhs-sidecar-2.7.2-{target}.tar.gz"
+    root = path / name.removesuffix(".tar.gz")
+    operator = root / "bin/kindred-xhs"
+    operator.parent.mkdir(parents=True)
+    operator.write_text("#!/bin/sh\n")
+    operator.chmod(0o755)
+    (root / "LICENSE").write_text("MIT\n")
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": "2.7.2",
+                "source_sha": source_sha,
+                "target": target,
+                "service_api_version": "1",
+            }
+        )
+    )
+    archive = path / name
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(root, arcname=root.name)
+    return archive
+
+
 def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
     root = Path(__file__).resolve().parents[3]
     inputs = json.loads((root / "distribution/release-inputs.json").read_text())
 
-    assert inputs["release_version"] == "0.3.1"
+    assert inputs["release_version"] == "0.4.0"
     assert set(inputs["mouth_hosts"]) == {"openclaw", "hermes"}
     assert len(inputs["mouth_hosts"]["openclaw"]["profiles"]) == 2
     assert inputs["mouth_hosts"]["hermes"]["maturity"] == "experimental"
@@ -76,6 +101,9 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
         assert sum(item[4] == "web" for item in wheels) == 4
         assert all(item[0] in inputs["licenses"] for item in wheels)
         assert all(len(item[3]) == 64 and item[2].endswith(".whl") for item in wheels)
+    assert inputs["xiaohongshu"]["source_sha"] == "b019fdbf02ba0e8d4f4fdb4f15b58230a8493f5d"
+    assert inputs["xiaohongshu"]["wheel"][1] == "0.3.3"
+    assert {row[1] for row in inputs["xiaohongshu"]["sidecars"].values()} == {"2.7.2"}
 
 
 def test_release_version_must_match_the_root_wheel(tmp_path: Path) -> None:
@@ -156,8 +184,14 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     first_party_dir = tmp_path / "first-party"
     first_party_dir.mkdir()
     first_party = _wheel(first_party_dir)
+    xhs_wheel = _wheel(first_party_dir, "kindred-capability-xiaohongshu", "0.3.3")
     python = _python_archive(tmp_path)
     digest = hashlib.sha256(python.read_bytes()).hexdigest()
+    source_sha = "a" * 40
+    sidecars = {
+        platform: _sidecar(tmp_path, platform, source_sha)
+        for platform in ("macos-arm64", "ubuntu24-x86_64")
+    }
     inputs = {
         "schema_version": 1,
         "release_version": "0.1.0",
@@ -174,6 +208,29 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
                 "maturity": "experimental",
                 "platforms": ["macos-arm64", "ubuntu24-x86_64"],
                 "profiles": [{"release": "v1", "package": "1.0.0", "verification": "verified"}],
+            },
+        },
+        "xiaohongshu": {
+            "source_sha": source_sha,
+            "release_tag": "kindred-xhs-v0.3.3",
+            "wheel": [
+                "kindred-capability-xiaohongshu",
+                "0.3.3",
+                xhs_wheel.name,
+                xhs_wheel.stat().st_size,
+                hashlib.sha256(xhs_wheel.read_bytes()).hexdigest(),
+                "MIT",
+            ],
+            "sidecars": {
+                platform: [
+                    sidecar.name,
+                    "2.7.2",
+                    sidecar.stat().st_size,
+                    hashlib.sha256(sidecar.read_bytes()).hexdigest(),
+                    "MIT",
+                    1,
+                ]
+                for platform, sidecar in sidecars.items()
             },
         },
         "build_tools": {},
@@ -203,7 +260,7 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
             for name in ("macos-arm64", "ubuntu24-x86_64")
         },
         "wheels": {"common": [], "macos-arm64": [], "ubuntu24-x86_64": []},
-        "licenses": {},
+        "licenses": {"kindred-capability-xiaohongshu": "MIT"},
         "web_runtime": [],
     }
     distribution = root / "distribution"
@@ -211,6 +268,10 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     (distribution / "release-inputs.json").write_text(json.dumps(inputs))
     (cache / "python").mkdir(parents=True)
     (cache / "python" / python.name).write_bytes(python.read_bytes())
+    (cache / "external").mkdir()
+    (cache / "external" / xhs_wheel.name).write_bytes(xhs_wheel.read_bytes())
+    for sidecar in sidecars.values():
+        (cache / "external" / sidecar.name).write_bytes(sidecar.read_bytes())
     monkeypatch.setattr(release, "_build_first_party", lambda *_args: [first_party])
     monkeypatch.setattr(
         release.subprocess,
@@ -221,7 +282,7 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     manifest = release.build_release(root, cache, output)
 
     assert set(manifest["platforms"]) == {"macos-arm64", "ubuntu24-x86_64"}
-    assert manifest["life_assets"] == {"actions": 13, "activities": 7}
+    assert manifest["life_assets"] == {"actions": 15, "activities": 8}
     assert manifest["install_skill"] == {
         "included": True,
         "sha256": hashlib.sha256(install_skill.read_bytes()).hexdigest(),
@@ -235,6 +296,8 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
         with tarfile.open(bundle) as archive:
             assert all(not member.issym() and not member.islnk() for member in archive)
             assert "install-metadata.json" not in archive.getnames()
+            assert "services/xhs-mcp-sidecar.tar.gz" in archive.getnames()
+            assert f"wheelhouse/{xhs_wheel.name}" in archive.getnames()
     sums = (output / "SHA256SUMS").read_text()
     assert "manifest.json" in sums and "SHA256SUMS" not in sums
     sbom = json.loads((output / "SBOM.spdx.json").read_text())

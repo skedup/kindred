@@ -33,10 +33,19 @@ import json
 import logging
 import subprocess
 import tempfile
+from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol
 
 from kindred.llm.client import LlmClientError
 from kindred.llm.real_client import parse_llm_json, system_prompt_for, text_fingerprint
+from kindred.telemetry import (
+    CanonicalUsage,
+    LlmRequestObservation,
+    PromptShape,
+    extract_claude_code_usage,
+    observe_llm_request,
+    safe_response_model,
+)
 
 if TYPE_CHECKING:
     from kindred.config import KindredLlmConfig
@@ -135,6 +144,7 @@ class ClaudeCodeLlmClient:
 
     def complete(self, prompt: str, *, role: Role) -> dict[str, Any]:
         """调 claude-code 生成内容，解析信封 ``result`` 为 dict。schema 由调用节点验证。"""
+        system = system_prompt_for(role)
         argv = [
             self._claude_bin,
             "-p",
@@ -144,47 +154,58 @@ class ClaudeCodeLlmClient:
             "--output-format",
             "json",
             "--system-prompt",
-            system_prompt_for(role),
+            system,
             "--model",
             self._model,
             "--tools",
             "",
         ]
-        try:
-            # cwd=中立目录：真正传给子进程，避开项目 CLAUDE.md 上溯注入（codex N-1）。
-            result = self._runner(argv, prompt, self._timeout_s, self._cwd)
-        except (OSError, subprocess.SubprocessError) as exc:
-            msg = f"ClaudeCodeLlmClient: 子进程失败 (role={role}, model={self._model})：{exc}"
-            raise ClaudeCodeLlmClientError(msg) from exc
+        with observe_llm_request(
+            role=role,
+            round_index=1,
+            provider="claude_code",
+            requested_model=self._model,
+            prompt_shape_factory=partial(_extract_prompt_shape, system, prompt),
+        ) as observation:
+            observation.mark_request_started()
+            try:
+                # cwd=中立目录：真正传给子进程，避开项目 CLAUDE.md 上溯注入（codex N-1）。
+                result = self._runner(argv, prompt, self._timeout_s, self._cwd)
+            except (OSError, subprocess.SubprocessError) as exc:
+                msg = f"ClaudeCodeLlmClient: 子进程失败 (role={role}, model={self._model})：{exc}"
+                raise ClaudeCodeLlmClientError(msg) from exc
 
-        if result.returncode != 0:
-            msg = (
-                f"ClaudeCodeLlmClient: claude 退出码 {result.returncode} "
-                f"(role={role}, model={self._model})：{result.stderr[:300]}"
+            if result.returncode != 0:
+                _record_best_effort_envelope(observation, result.stdout)
+                msg = (
+                    f"ClaudeCodeLlmClient: claude 退出码 {result.returncode} "
+                    f"(role={role}, model={self._model})：{result.stderr[:300]}"
+                )
+                raise ClaudeCodeLlmClientError(msg)
+
+            envelope = self._parse_envelope(result.stdout, role=role)
+            _record_envelope(observation, envelope)
+            if envelope.get("is_error"):
+                msg = (
+                    f"ClaudeCodeLlmClient: claude 报错 (role={role}, "
+                    f"subtype={envelope.get('subtype')})：{envelope.get('result')}"
+                )
+                raise ClaudeCodeLlmClientError(msg)
+
+            text = envelope.get("result")
+            if not isinstance(text, str) or not text.strip():
+                msg = f"ClaudeCodeLlmClient: 信封 result 为空 (role={role})"
+                raise ClaudeCodeLlmClientError(msg)
+
+            parsed = self._parse_json_result(text, role=role)
+            _LOG.debug(
+                "ClaudeCodeLlmClient ok role=%s model=%s cost_microusd=%s",
+                role,
+                self._model,
+                extract_claude_code_usage(envelope).provider_cost_microusd,
             )
-            raise ClaudeCodeLlmClientError(msg)
-
-        envelope = self._parse_envelope(result.stdout, role=role)
-        if envelope.get("is_error"):
-            msg = (
-                f"ClaudeCodeLlmClient: claude 报错 (role={role}, "
-                f"subtype={envelope.get('subtype')})：{envelope.get('result')}"
-            )
-            raise ClaudeCodeLlmClientError(msg)
-
-        text = envelope.get("result")
-        if not isinstance(text, str) or not text.strip():
-            msg = f"ClaudeCodeLlmClient: 信封 result 为空 (role={role})"
-            raise ClaudeCodeLlmClientError(msg)
-
-        parsed = self._parse_json_result(text, role=role)
-        _LOG.debug(
-            "ClaudeCodeLlmClient ok role=%s model=%s cost_usd=%s",
-            role,
-            self._model,
-            envelope.get("total_cost_usd"),
-        )
-        return parsed
+            return parsed
+        raise AssertionError("LLM request observation suppressed control flow")
 
     def close(self) -> None:
         """no-op：每次调用起独立子进程，无长连接需关闭（满足 ManagedLlmClient）。"""
@@ -229,6 +250,54 @@ class ClaudeCodeLlmClient:
             )
             raise ClaudeCodeLlmClientError(msg)
         return parsed
+
+
+def _extract_prompt_shape(system: str, prompt: str) -> PromptShape:
+    return PromptShape(
+        system_text_chars=len(system),
+        initial_user_text_chars=len(prompt),
+        tool_schema_json_chars=0,
+        response_schema_json_chars=0,
+        model_history_json_chars=0,
+        tool_result_json_chars=0,
+    )
+
+
+def _best_effort_envelope(stdout: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _record_envelope(
+    observation: LlmRequestObservation,
+    envelope: dict[str, Any],
+) -> None:
+    observation.record_response(
+        http_status=None,
+        usage_factory=partial(extract_claude_code_usage, envelope),
+        response_model_factory=lambda: safe_response_model(envelope.get("model")),
+    )
+
+
+def _record_best_effort_envelope(
+    observation: LlmRequestObservation,
+    stdout: str,
+) -> None:
+    """Defer error-envelope parsing so telemetry can never replace business failure."""
+
+    def projection() -> tuple[CanonicalUsage, str | None]:
+        envelope = _best_effort_envelope(stdout)
+        if envelope is None:
+            return extract_claude_code_usage(None), None
+        return (
+            extract_claude_code_usage(envelope),
+            safe_response_model(envelope.get("model")),
+        )
+
+    observation.record_response_from(http_status=None, projection_factory=projection)
 
 
 __all__ = ["ClaudeCodeLlmClient", "ClaudeCodeLlmClientError"]

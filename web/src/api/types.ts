@@ -175,3 +175,179 @@ export interface HealthResponse {
   status: string
   db_exists: boolean
 }
+
+export type TelemetryWindow = '24h' | '7d' | '30d'
+export type TelemetryRunKind = 'tick' | 'dream'
+export type TelemetryRunStatus = 'running' | 'succeeded' | 'failed' | 'stale'
+export type TelemetryStoredStatus = Exclude<TelemetryRunStatus, 'stale'>
+
+export interface TelemetryTokenTotals {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+}
+
+export interface TelemetryLatencyPercentiles {
+  samples: number
+  p50_us: number | null
+  p95_us: number | null
+  p99_us: number | null
+}
+
+export interface TelemetryUsageCoverage {
+  request_count: number
+  total_available: number
+  breakdown_available: number
+  total_ratio: number
+  breakdown_ratio: number
+}
+
+export interface TelemetryUsageBreakdown {
+  dimension: 'role' | 'provider' | 'model'
+  key: string
+  request_count: number
+  tokens: TelemetryTokenTotals
+}
+
+export interface TelemetryStageLatency {
+  name: string
+  latency: TelemetryLatencyPercentiles
+}
+
+export interface TelemetryActRoundBucket {
+  rounds: number
+  run_count: number
+}
+
+export interface TelemetryActMetrics {
+  round_distribution: TelemetryActRoundBucket[]
+  input_amplification_mean: number | null
+}
+
+export interface TelemetryBudgetStatus {
+  daily_token_warn: number | null
+  daily_token_exceeded: boolean | null
+  tick_duration_warn_seconds: number | null
+  tick_duration_exceeded: boolean | null
+  dream_duration_warn_seconds: number | null
+  dream_duration_exceeded: boolean | null
+}
+
+export interface TelemetrySummaryResponse {
+  schema_version: 1
+  window: TelemetryWindow
+  from_at: string
+  to_at: string
+  empty: boolean
+  run_count: number
+  succeeded_run_count: number
+  failed_run_count: number
+  running_run_count: number
+  stale_run_count: number
+  tokens: TelemetryTokenTotals
+  coverage: TelemetryUsageCoverage
+  run_latency: TelemetryLatencyPercentiles
+  stage_latency: TelemetryLatencyPercentiles
+  stage_latencies: TelemetryStageLatency[]
+  breakdowns: TelemetryUsageBreakdown[]
+  breakdowns_truncated: boolean
+  cache_read_ratio: number | null
+  failed_spend_ratio: number | null
+  act: TelemetryActMetrics
+  budget: TelemetryBudgetStatus
+}
+
+export interface TelemetryRunItem {
+  run_id: string
+  run_kind: TelemetryRunKind
+  execution_mode: 'real' | 'mock'
+  trigger_source: 'cold_start' | 'heartbeat' | 'watcher' | null
+  dream_date: string | null
+  tick_id: number | null
+  started_at: string
+  ended_at: string | null
+  duration_us: number | null
+  status: TelemetryRunStatus
+  error_type: string | null
+  app_version: string
+  span_count: number
+  request_count: number
+  total_available: number
+  tokens: TelemetryTokenTotals
+}
+
+export interface TelemetryRunListResponse {
+  schema_version: 1
+  empty: boolean
+  items: TelemetryRunItem[]
+  next_cursor: string | null
+}
+
+export interface TelemetryUsageDetail {
+  usage_source: 'provider_complete' | 'provider_partial' | 'unavailable'
+  reconciliation_status: 'exact' | 'provider_total_only' | 'partial' | 'mismatch' | 'unavailable'
+  base_input_tokens: number | null
+  visible_output_tokens: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  total_derived: boolean
+  cache_read_input_tokens: number | null
+  cache_write_input_tokens: number | null
+  reasoning_output_tokens: number | null
+  tool_use_prompt_tokens: number | null
+  unattributed_tokens: number | null
+  provider_cost_microusd: number | null
+  payload_json_bytes: number | null
+  system_text_chars: number | null
+  initial_user_text_chars: number | null
+  tool_schema_json_chars: number | null
+  response_schema_json_chars: number | null
+  model_history_json_chars: number | null
+  tool_result_json_chars: number | null
+}
+
+export interface TelemetrySpanDetail {
+  span_id: string
+  parent_span_id: string | null
+  sequence: number
+  span_kind: 'graph_node' | 'llm_request' | 'tool'
+  name: string
+  llm_role:
+    | 'sense.llm'
+    | 'act.llm'
+    | 'dream.summarize'
+    | 'dream.reflect'
+    | 'dream.gate'
+    | 'dream.excerpt'
+    | null
+  round_index: number | null
+  source_round_index: number | null
+  tool_effect:
+    | 'read_only'
+    | 'staged_state_event'
+    | 'external_side_effect'
+    | 'artifact_write'
+    | null
+  provider: string | null
+  requested_model: string | null
+  response_model: string | null
+  started_at: string
+  ended_at: string | null
+  duration_us: number | null
+  status: TelemetryStoredStatus
+  error_type: string | null
+  http_status: number | null
+  usage: TelemetryUsageDetail | null
+}
+
+export interface TelemetryStageTree {
+  stage: TelemetrySpanDetail
+  children: TelemetrySpanDetail[]
+}
+
+export interface TelemetryRunDetailResponse {
+  schema_version: 1
+  run: TelemetryRunItem
+  stages: TelemetryStageTree[]
+}

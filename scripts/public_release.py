@@ -22,7 +22,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _MAX_DEPTH = 4
-_MAX_FILE_BYTES = 128 * 1024 * 1024
+_MAX_FILE_BYTES = 192 * 1024 * 1024
 _MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_MEMBERS = 50_000
 _MAX_ARCHIVES = 128
@@ -58,7 +58,6 @@ _CREDENTIAL_PATTERN = re.compile(
     """
 )
 _RULES = {
-    "private_platform": re.compile(r"(?i)(xiaohongshu|小红书|\bxhs(?:\b|[_-]))"),
     "internal_domain": re.compile(r"(?i)\b[a-z0-9.-]+\.woa\.com\b"),
     "internal_email": re.compile(
         r"(?i)\b[a-z0-9._%+-]+@(?:[a-z0-9.-]+\.)?(?:woa\.com|tencent\.com)\b"
@@ -823,7 +822,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             inputs = _load_json(args.trusted_inputs)
             platform_hashes = {item["python"][4] for item in inputs["platforms"].values()}
             wheel_hashes = {row[3] for rows in inputs["wheels"].values() for row in rows}
-            policy["trusted_archive_sha256"] = sorted(platform_hashes | wheel_hashes)
+            xhs = inputs.get("xiaohongshu", {})
+            xhs_hashes = (
+                {xhs["wheel"][4], *(row[3] for row in xhs["sidecars"].values())}
+                if isinstance(xhs, dict) and {"wheel", "sidecars"} <= set(xhs)
+                else set()
+            )
+            policy["trusted_archive_sha256"] = sorted(platform_hashes | wheel_hashes | xhs_hashes)
         scanned: list[Finding] = []
         for path in args.paths:
             try:

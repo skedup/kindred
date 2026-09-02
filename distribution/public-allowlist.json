@@ -82,6 +82,7 @@
     "src/kindred/capability_host/internal.py",
     "src/kindred/capability_host/messaging.py",
     "src/kindred/capability_host/registry.py",
+    "src/kindred/capability_host/resources.py",
     "src/kindred/capability_host/runtime.py",
     "src/kindred/character_card.py",
     "src/kindred/cli.py",
@@ -286,9 +287,12 @@
     "src/kindred/runtime/gateway.py",
     "src/kindred/runtime/history_sync.py",
     "src/kindred/runtime/io_bridge.py",
+    "src/kindred/runtime/materialize_assets.py",
+    "src/kindred/runtime/observed_invoke.py",
     "src/kindred/runtime/pidfile.py",
     "src/kindred/runtime/platform_service.py",
     "src/kindred/runtime/scheduler.py",
+    "src/kindred/runtime/telemetry_thresholds.py",
     "src/kindred/runtime/tick_graph.py",
     "src/kindred/runtime/watcher.py",
     "src/kindred/service_templates/__init__.py",
@@ -306,6 +310,17 @@
     "src/kindred/state/possession.py",
     "src/kindred/state/state.py",
     "src/kindred/state/tick.py",
+    "src/kindred/telemetry/__init__.py",
+    "src/kindred/telemetry/context.py",
+    "src/kindred/telemetry/contracts.py",
+    "src/kindred/telemetry/facade.py",
+    "src/kindred/telemetry/layout.py",
+    "src/kindred/telemetry/noop.py",
+    "src/kindred/telemetry/query.py",
+    "src/kindred/telemetry/query_contracts.py",
+    "src/kindred/telemetry/schema.py",
+    "src/kindred/telemetry/sqlite_sink.py",
+    "src/kindred/telemetry/usage.py",
     "src/kindred/web/__init__.py",
     "src/kindred/web/app.py",
     "src/kindred/web/assets.py",
@@ -321,6 +336,7 @@
     "tests/public/test_life_continuity_contract.py",
     "tests/public/test_offline_bootstrap.py",
     "tests/public/test_openclaw_runtime_contract.py",
+    "tests/public/test_portable_resources_contract.py",
     "tests/public/test_public_runtime.py",
     "tests/public/test_recent_contact_contract.py",
     "tests/public/test_relationship_contract.py",
@@ -347,6 +363,11 @@
     "web/src/components/InteriorLineChart.vue",
     "web/src/components/NowCard.test.ts",
     "web/src/components/NowCard.vue",
+    "web/src/components/ObservabilityView.test.ts",
+    "web/src/components/ObservabilityView.vue",
+    "web/src/components/TelemetryBarChart.vue",
+    "web/src/components/TelemetryRunWaterfall.vue",
+    "web/src/components/TelemetrySpanRow.vue",
     "web/src/components/TimelineCard.vue",
     "web/src/components/WorksView.test.ts",
     "web/src/components/WorksView.vue",
@@ -354,6 +375,8 @@
     "web/src/lib/artifacts.ts",
     "web/src/lib/interiorChart.test.ts",
     "web/src/lib/interiorChart.ts",
+    "web/src/lib/telemetry.test.ts",
+    "web/src/lib/telemetry.ts",
     "web/src/main.ts",
     "web/src/styles/main.css",
     "web/tsconfig.json",
@@ -365,10 +388,9 @@
     {
       "path": "scripts/public_release.py",
       "rule_ids": [
-        "private_path",
-        "private_platform"
+        "private_path"
       ],
-      "sha256": "1c090b26b5c8c887d25ac93b6a1e4b745744242b22f86e4ceba3d67c18e8e6ed"
+      "sha256": "6f72887b5c5081b55f2403bcc6283e9cd39e7a1d0f9a611e77e6a243f9777004"
     }
   ]
 }

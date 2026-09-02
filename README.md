@@ -10,7 +10,7 @@ optionally performs one activity step, validates the complete state, and then
 persists the result. OpenClaw or Hermes provides the conversation surface;
 portable capability packages add optional tools without changing the core graph.
 
-> **Public Preview:** `v0.3.1` supports one resident on one trusted host. It is
+> **Public Preview:** `v0.4.0` supports one resident on one trusted host. It is
 > intended for operators who are comfortable reviewing local configuration and
 > running pre-release software. This preview supports fresh installs only. Use a
 > fresh user/HOME; the installer refuses to overwrite a different preview version.
@@ -39,14 +39,14 @@ interactive installer:
 
 ```sh
 curl -fsSL \
-  https://github.com/skedup/kindred/releases/download/v0.3.1/install.sh \
+  https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh \
   | sh
 ```
 
 To inspect the bootstrap first:
 
 ```sh
-curl -fLO https://github.com/skedup/kindred/releases/download/v0.3.1/install.sh
+curl -fLO https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh
 less install.sh
 sh install.sh
 ```
@@ -88,8 +88,20 @@ own `api_content` replay. Kindred does not read, replace, or synchronize Hermes
 
 ## Data Boundaries
 
-Kindred does not add analytics, crash reporting, or diagnostic telemetry.
-Functional providers still receive the data required to do their work:
+Kindred does not send analytics, crash reports, or diagnostic telemetry to an
+external service. By default it writes content-free token counts, durations,
+statuses, and safe Provider/stage/tool identifiers to the local
+`life/data/kindred-telemetry.db`. It never stores prompts, responses, tool
+arguments/results, targets, or credentials there. Disable this local database
+with `observability.enabled: false` or
+`KINDRED_OBSERVABILITY_ENABLED=false`. Rows older than 90 days are logically
+deleted; SQLite is not automatically vacuumed and this is not secure erase.
+Uninstall preserves the telemetry database; after stopping Kindred, the
+operator may manually delete that exact file. The loopback Web server exposes
+content-free summaries and run/span detail under the read-only
+`/api/observability/` API; it never creates or migrates this database while
+serving a query. Functional providers still
+receive the data required to do their work:
 
 - the configured LLM receives the selected Persona and runtime context;
 - the map provider receives the home address used for world resolution;
@@ -98,8 +110,8 @@ Functional providers still receive the data required to do their work:
 - capabilities explicitly enabled by the operator may call their own providers.
 
 Credentials and resident data stay outside the source distribution. Diagnostic
-output is designed to report safe shapes rather than message, Persona, token,
-account, or target values.
+output is designed to report safe shapes rather than message, Persona,
+credential, account, or target values.
 
 ## Development
 

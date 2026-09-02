@@ -15,6 +15,7 @@ SUPPORTED_SECRET_KEYS = frozenset(
         "DEEPSEEK_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
+        "KINDRED_CAPABILITY_DRAW_API_KEY",
         "KINDRED_GATEWAY_TOKEN",
         "OPENAI_API_KEY",
         "XAI_API_KEY",

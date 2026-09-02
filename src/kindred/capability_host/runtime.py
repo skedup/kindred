@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -16,12 +17,14 @@ from kindred.capability_host.artifacts import (
 )
 from kindred.capability_host.discovery import discover_enabled_contributions
 from kindred.capability_host.facts import FactViewBuilder
-from kindred.capability_host.internal import HostTickContext
+from kindred.capability_host.internal import ArtifactProfileRoute, HostTickContext
 from kindred.capability_host.registry import (
     CapabilityRegistry,
     InternalBinding,
     PortableAdapter,
 )
+from kindred.capability_host.resources import LifeAssetView, load_runtime_life_assets
+from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
 from kindred_capability_sdk import FactView, InvocationContext, ToolEffect, TransientStore
 
 if TYPE_CHECKING:
@@ -34,6 +37,7 @@ class HostExecutionContext:
     fact_builders: Mapping[str, FactViewBuilder] = field(default_factory=dict)
     services: Mapping[str, Any] = field(default_factory=dict)
     transient: dict[str, TransientStore] = field(default_factory=dict)
+    artifact_routes: tuple[ArtifactProfileRoute, ...] = ()
 
     def portable_context(
         self,
@@ -50,6 +54,26 @@ class HostExecutionContext:
             if not isinstance(view, FactView) or view.name != name:
                 raise ValueError(f"fact builder returned invalid view for {name!r}")
             facts.append(view)
+        routes = tuple(
+            route for route in self.artifact_routes if route.producer_capability == capability_name
+        )
+        if routes:
+            facts.append(
+                FactView(
+                    "artifact.profile_routes",
+                    {
+                        "routes": [
+                            {
+                                "selector_capability": route.selector_capability,
+                                "profile": route.profile,
+                                "member_paths": dict(route.member_paths),
+                                "source_ref_kinds": sorted(route.source_ref_kinds),
+                            }
+                            for route in routes
+                        ]
+                    },
+                )
+            )
         artifact_store = _artifact_store(self.services)
         writer = (
             artifact_store.writer(capability_name, produced_artifact_profiles)
@@ -101,6 +125,9 @@ class HostRuntime:
     provider_handles: Mapping[str, Any] = field(default_factory=dict)
     fact_view_builders: Mapping[str, FactViewBuilder] = field(default_factory=dict)
     host_services: Mapping[str, Any] = field(default_factory=dict)
+    actions_dir: Path = ACTIONS_DIR
+    activities_dir: Path = ACTIVITIES_DIR
+    artifact_routes: tuple[ArtifactProfileRoute, ...] = ()
     _stack: ExitStack = field(default_factory=ExitStack, repr=False)
 
     def __post_init__(self) -> None:
@@ -109,7 +136,12 @@ class HostRuntime:
         self.host_services = MappingProxyType(dict(self.host_services))
 
     def execution_context(self, tick: HostTickContext) -> HostExecutionContext:
-        return HostExecutionContext(tick, self.fact_view_builders, self.host_services)
+        return HostExecutionContext(
+            tick,
+            self.fact_view_builders,
+            self.host_services,
+            artifact_routes=self.artifact_routes,
+        )
 
     def artifact_store(self) -> ArtifactStore | None:
         return _artifact_store(self.host_services)
@@ -127,11 +159,13 @@ def build_host_runtime(
     host_services: Mapping[str, Any] | None = None,
     artifact_profiles: frozenset[str] = frozenset(),
     secret_lookup: Callable[[str, str], str | None] | None = None,
+    life_assets: LifeAssetView | None = None,
 ) -> HostRuntime:
     facts, services = fact_view_builders or {}, host_services or {}
     registry = CapabilityRegistry(config=config, declared_capability_names=config.capabilities)
     stack = ExitStack()
     try:
+        stable_assets = life_assets or load_runtime_life_assets()
         for binding in internal_bindings:
             registry.register(binding)
         discovery_kwargs = {} if secret_lookup is None else {"secret_lookup": secret_lookup}
@@ -141,6 +175,7 @@ def build_host_runtime(
             available_host_services=frozenset(services),
             available_fact_views=frozenset(facts),
             available_artifact_profiles=artifact_profiles,
+            artifact_routes=stable_assets.artifact_routes,
             **discovery_kwargs,
         )
         for loaded in contributions:
@@ -157,6 +192,9 @@ def build_host_runtime(
         provider_handles or {},
         facts,
         services,
+        stable_assets.actions_dir,
+        stable_assets.activities_dir,
+        stable_assets.artifact_routes,
         stack,
     )
 

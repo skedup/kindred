@@ -69,7 +69,7 @@ def test_cli_contract_fixture_identity_is_frozen() -> None:
     assert contract["baseline"] == {
         "click_version": version("click"),
         "prog_name": PROG_NAME,
-        "source_commit": "b72301d3b47e2c177f174e6386449c9fcfc311fd",
+        "source_commit": "95083ee1a2f517a3f76c5db55363ad8d55047838",
         "terminal_width": TERMINAL_WIDTH,
     }
 
@@ -98,7 +98,14 @@ def test_recovery_service_commands_do_not_parse_broken_runtime_config(
     )
     monkeypatch.setattr(platform_service.sys, "platform", "linux")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-parent-secret")
     platform_service.install_services(config, include_web=False)
+    unit = xdg / "systemd/user/kindred-heart.service"
+    unit_text = unit.read_text(encoding="utf-8")
+    assert 'ExecStart="/usr/bin/env" "-i"' in unit_text
+    assert '"-I" "-m" "kindred.cli" "run"' in unit_text
+    assert "\nEnvironment=" not in unit_text
+    assert "synthetic-parent-secret" not in unit_text
     config.write_text("openclaw: {}\n", encoding="utf-8")
     calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(
@@ -111,6 +118,44 @@ def test_recovery_service_commands_do_not_parse_broken_runtime_config(
     assert platform_service.control_services(config, action="stop") == ("heart",)
     platform_service.show_logs("heart", follow=False, lines=5, config_path=config)
     assert calls[-1][0] == "journalctl"
+
+
+def test_soul_rollback_life_root_cannot_write_external_persona(tmp_path: Path) -> None:
+    persona = tmp_path / "persona"
+    persona.mkdir()
+    paths = {
+        "soul_full": persona / "SOUL.md",
+        "identity": persona / "IDENTITY.md",
+        "user": persona / "USER.md",
+        "soul_excerpt": persona / "SOUL_excerpt.md",
+    }
+    for name, path in paths.items():
+        path.write_text(f"original-{name}", encoding="utf-8")
+    config = tmp_path / "kindred.yaml"
+    config.write_text(
+        "paths:\n"
+        f"  life_root: {tmp_path / 'resident'}\n"
+        + "".join(f"  {name}: {path}\n" for name, path in paths.items()),
+        encoding="utf-8",
+    )
+
+    result = _invoke(
+        [
+            "soul",
+            "rollback",
+            "--to",
+            "synthetic",
+            "--config",
+            str(config),
+            "--life-root",
+            str(tmp_path / "fixture-life"),
+            "--yes",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "临时历史与外部 Persona" in result.output
+    assert all(path.read_text(encoding="utf-8").startswith("original-") for path in paths.values())
 
 
 @pytest.mark.parametrize(

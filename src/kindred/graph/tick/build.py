@@ -42,6 +42,7 @@ from kindred.graph.tick.routing import (
     route_after_sense_llm,
 )
 from kindred.state.tick import TickState
+from kindred.telemetry import observe_graph_node
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -78,6 +79,7 @@ def _add_node(
     这是 LangGraph 类型系统边界，运行时正常；单点忽略比 ``cast(Any)`` 更精准。
     """
     node = provided if provided is not None else default
+    node = observe_graph_node(name, node)
     builder.add_node(name, node)  # type: ignore[call-overload]
 
 

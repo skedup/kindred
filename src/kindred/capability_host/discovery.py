@@ -5,11 +5,12 @@ from __future__ import annotations
 import importlib.metadata as metadata
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from packaging.requirements import Requirement
 from packaging.version import Version
 
+from kindred.capability_host.internal import ArtifactProfileRoute
 from kindred.config import KindredCapabilityConfig
 from kindred_capability_sdk import (
     CapabilityContribution,
@@ -52,6 +53,7 @@ def discover_enabled_contributions(
     available_host_services: frozenset[str],
     available_fact_views: frozenset[str],
     available_artifact_profiles: frozenset[str],
+    artifact_routes: tuple[ArtifactProfileRoute, ...] = (),
     secret_lookup: Callable[[str, str], str | None] = _environment_secret,
 ) -> tuple[LoadedContribution, ...]:
     enabled = sorted(name for name, value in configs.items() if value.enabled)
@@ -88,6 +90,16 @@ def discover_enabled_contributions(
             raise CapabilityDiscoveryError(
                 f"capability {name!r} has missing grants: "
                 f"services={sorted(missing[0])}, views={sorted(missing[1])}"
+            )
+        route_profiles = frozenset(
+            route.profile for route in artifact_routes if route.producer_capability == name
+        )
+        if route_profiles:
+            contribution = replace(
+                contribution,
+                produced_artifact_profiles=(
+                    contribution.produced_artifact_profiles | route_profiles
+                ),
             )
         loaded.append(LoadedContribution(name, contribution))
     produced_profiles = frozenset(

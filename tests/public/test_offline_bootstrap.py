@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 
 
 def _command(path: Path, name: str, body: str) -> None:
@@ -35,6 +35,12 @@ if [ "$1" = -m ] && [ "$2" = venv ]; then
   chmod +x "$3/bin/python" "$3/bin/kindred"
   exit 0
 fi
+if [ "$1" = -m ] && [ "$2" = kindred.runtime.materialize_assets ]; then
+  [ "${KINDRED_FAIL_MATERIALIZE:-0}" != 1 ] || exit 2
+  mkdir -p "$(dirname "$0")/../../runtime-assets"
+  printf ok >"$(dirname "$0")/../../runtime-assets/runtime-assets.json"
+  exit 0
+fi
 case "$1" in
 */install.py)
   [ "$2" != verify ] || [ "${KINDRED_FAIL_VERIFY:-0}" != 1 ] || exit 2
@@ -51,6 +57,15 @@ exit 2
     with tarfile.open(stage / "python-runtime.tar.gz", "w:gz") as archive:
         archive.add(runtime / "python", arcname="python")
     (stage / "wheelhouse").mkdir()
+    sidecar = server / "xhs-sidecar"
+    operator = sidecar / "bin/kindred-xhs"
+    operator.parent.mkdir(parents=True)
+    operator.write_text("#!/bin/sh\nexit 0\n")
+    operator.chmod(0o755)
+    services = stage / "services"
+    services.mkdir()
+    with tarfile.open(services / "xhs-mcp-sidecar.tar.gz", "w:gz") as archive:
+        archive.add(sidecar, arcname="kindred-xhs-sidecar")
     name = f"kindred-v{VERSION}-{platform}.tar.gz"
     with tarfile.open(server / name, "w:gz") as archive:
         for item in stage.iterdir():
@@ -91,6 +106,7 @@ def _run(
     traversal: bool = False,
     installed_version: str | None = None,
     fail_verify: bool = False,
+    fail_materialize: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     root = Path(__file__).resolve().parents[2]
     home = tmp_path / "home"
@@ -115,11 +131,16 @@ def _run(
     env = {
         **os.environ,
         "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_CACHE_HOME": str(home / ".cache"),
+        "XDG_DATA_HOME": str(home / ".local/share"),
+        "XDG_STATE_HOME": str(home / ".local/state"),
         "PATH": f"{commands}:/usr/bin:/bin:/usr/sbin:/sbin",
         "KINDRED_RELEASE_BASE_URL": server.as_uri(),
         "KINDRED_OS_RELEASE_FILE": str(release_file),
         "KINDRED_NO_WEB": "1" if no_web else "0",
         "KINDRED_FAIL_VERIFY": "1" if fail_verify else "0",
+        "KINDRED_FAIL_MATERIALIZE": "1" if fail_materialize else "0",
     }
     return subprocess.run(
         ["sh", str(root / "scripts/install.sh")],
@@ -141,6 +162,8 @@ def test_fake_offline_install_selects_platform_and_web_mode(
     assert (tmp_path / "home/install-mode").read_text() == ("1" if no_web else "0")
     marker = tmp_path / f"home/.local/share/kindred/runtime/{VERSION}/.kindred-release-version"
     assert marker.read_text().strip() == VERSION
+    assets = marker.parent / "runtime-assets/runtime-assets.json"
+    assert assets.read_text() == "ok"
     assert "Continue in a terminal" in result.stdout
 
 
@@ -150,6 +173,9 @@ def test_same_version_repairs_but_different_version_refuses_before_download(tmp_
     kindred = same / f"home/.local/share/kindred/runtime/{VERSION}/venv/bin/kindred"
     kindred.write_text("healthy\n")
     failed = _run(same, "macos-arm64", fail_verify=True)
+    assert failed.returncode == 2
+    assert kindred.read_text() == "healthy\n"
+    failed = _run(same, "macos-arm64", fail_materialize=True)
     assert failed.returncode == 2
     assert kindred.read_text() == "healthy\n"
     assert _run(same, "macos-arm64").returncode == 0

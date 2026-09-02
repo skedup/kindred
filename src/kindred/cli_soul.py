@@ -25,6 +25,25 @@ def _soul_layout(config: KindredConfig) -> SoulLayout:
     )
 
 
+def _require_local_rollback_layout(config: KindredConfig, life_root: Path | None) -> None:
+    if life_root is None:
+        return
+    root = life_root.expanduser().resolve()
+    paths = {
+        "SOUL.md": config.paths.soul_full,
+        "IDENTITY.md": config.paths.identity,
+        "USER.md": config.paths.user,
+        "SOUL_excerpt.md": config.paths.soul_excerpt,
+        "soul-history": config.paths.soul_history_dir,
+    }
+    outside = tuple(name for name, path in paths.items() if not path.resolve().is_relative_to(root))
+    if outside:
+        raise click.ClickException(
+            "--life-root 不能让 rollback 组合临时历史与外部 Persona；"
+            "请改用一份完整、隔离的 --config。"
+        )
+
+
 @soul.command(name="list-snapshots")
 @click.option(
     "--config",
@@ -139,6 +158,7 @@ def soul_rollback(
         life_root=life_root,
         load_secrets=False,
     )
+    _require_local_rollback_layout(config, life_root)
     configure_logging(config.logging.level)
     layout = _soul_layout(config)
     soul_history_dir = config.paths.soul_history_dir

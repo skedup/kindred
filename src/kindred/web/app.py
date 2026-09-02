@@ -21,11 +21,12 @@ db 路径来自 ``KindredConfig.paths.db``（走 conf/kindred.yaml）。
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exception_handlers import http_exception_handler
@@ -42,6 +43,19 @@ from kindred.db.artifacts import ArtifactCommitRow
 from kindred.relationship.preflight import (
     RelationshipPreflightError,
     require_user_relationship,
+)
+from kindred.telemetry.layout import TelemetryLayout
+from kindred.telemetry.query import (
+    InvalidTelemetryCursor,
+    TelemetryQueryService,
+    TelemetryQueryUnavailable,
+)
+from kindred.telemetry.query_contracts import (
+    TelemetryRunDetailResponse,
+    TelemetryRunListResponse,
+    TelemetryRunStatus,
+    TelemetrySummaryResponse,
+    TelemetryWindow,
 )
 from kindred.web.contracts import (
     ArtifactDetailResponse,
@@ -81,6 +95,8 @@ def create_app(
     reveal_intimate: bool | None = None,
     artifact_store: ArtifactStore | None = None,
     static_dir: Path | None = None,
+    telemetry_db_path: Path | None = None,
+    telemetry_cursor_key: bytes | None = None,
 ) -> FastAPI:
     """构造只读可视化 app。
 
@@ -89,6 +105,8 @@ def create_app(
         否则 app 会从 cwd 的 conf/kindred.yaml 二次读，丢掉 --config 里的 web 设置。
     :param db_path: 显式覆盖 db 路径（测试注入用）。None = 用 config.paths.db。
     :param reveal_intimate: 显式覆盖「亲密度够」标志（测试注入）。None = 用 config。
+    :param telemetry_db_path: 显式覆盖独立 telemetry DB（测试注入用）。
+    :param telemetry_cursor_key: 显式覆盖 opaque cursor 签名材料（测试注入用）。
     """
     if config is None:
         config = load_kindred_config()
@@ -101,14 +119,45 @@ def create_app(
     # 标志（亲密关系实例 true / 默认 false；docs/02 §401 关系深度控制）。
     # 亲密度数值源（relationship.passion）未实装，先用 config 当代理。
     intimacy_high = reveal_intimate if reveal_intimate is not None else config.web.reveal_intimate
+    if telemetry_db_path is not None:
+        resolved_telemetry_db = telemetry_db_path
+    elif explicit_db:
+        resolved_telemetry_db = resolved_db.with_name("kindred-telemetry.db")
+    else:
+        resolved_telemetry_db = TelemetryLayout.from_life_root(config.paths.life_root).db_path
+    cursor_key = telemetry_cursor_key
+    if cursor_key is None:
+        identity = config.resident.install_id.strip() or str(resolved_telemetry_db)
+        cursor_key = hashlib.sha256(
+            b"kindred-observability-cursor-v1\0" + identity.encode("utf-8")
+        ).digest()
+    telemetry_query = TelemetryQueryService(
+        resolved_telemetry_db,
+        cursor_key=cursor_key,
+        daily_token_warn=config.observability.daily_token_warn,
+        tick_duration_warn_seconds=config.observability.tick_duration_warn_seconds,
+        dream_duration_warn_seconds=config.observability.dream_duration_warn_seconds,
+    )
 
     app = FastAPI(
         title="Kindred Life — 只读可视化",
         description="观察 ta 的生活。只读，绝不写库。",
         version=__version__,
     )
+
+    @app.middleware("http")
+    async def observability_no_store(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response = await call_next(request)
+        if request.url.path.startswith("/api/observability"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     api = APIRouter()
     visual_api = APIRouter(prefix="/api")
+    observability_api = APIRouter(prefix="/api/observability")
     try:
         visual_projector: VisualStateProjector | None = VisualStateProjector(
             config.resident.install_id
@@ -177,6 +226,60 @@ def create_app(
         if resolved_artifact_store is None:
             raise _artifact_unavailable()
         return resolved_artifact_store
+
+    def _observability_error(status_code: int, detail: str) -> HTTPException:
+        return HTTPException(
+            status_code=status_code,
+            detail=detail,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @observability_api.get("/summary", response_model=TelemetrySummaryResponse)
+    def observability_summary(
+        response: Response,
+        window: TelemetryWindow = "24h",
+    ) -> TelemetrySummaryResponse:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return telemetry_query.summary(window)
+        except TelemetryQueryUnavailable as exc:
+            raise _observability_error(503, "Observability data is unavailable") from exc
+
+    @observability_api.get("/runs", response_model=TelemetryRunListResponse)
+    def observability_runs(
+        response: Response,
+        cursor: str | None = Query(default=None, max_length=256),
+        limit: int = Query(default=20, ge=1, le=100),
+        kind: Literal["tick", "dream"] | None = None,
+        status: TelemetryRunStatus | None = None,
+        include_mock: bool = False,
+    ) -> TelemetryRunListResponse:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return telemetry_query.list_runs(
+                cursor=cursor,
+                limit=limit,
+                kind=kind,
+                status=status,
+                include_mock=include_mock,
+            )
+        except InvalidTelemetryCursor as exc:
+            raise _observability_error(422, "Invalid observability cursor") from exc
+        except TelemetryQueryUnavailable as exc:
+            raise _observability_error(503, "Observability data is unavailable") from exc
+
+    @observability_api.get("/runs/{run_id}", response_model=TelemetryRunDetailResponse)
+    def observability_run_detail(run_id: str, response: Response) -> TelemetryRunDetailResponse:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            detail = telemetry_query.run_detail(run_id)
+        except (TypeError, ValueError) as exc:
+            raise _observability_error(422, "Invalid observability run id") from exc
+        except TelemetryQueryUnavailable as exc:
+            raise _observability_error(503, "Observability data is unavailable") from exc
+        if detail is None:
+            raise _observability_error(404, "Observability run not found")
+        return detail
 
     def _artifact_row(tick_id: int, ordinal: int) -> ArtifactCommitRow:
         row: ArtifactCommitRow | None = _read_artifacts(
@@ -404,6 +507,7 @@ def create_app(
     app.include_router(api)
     app.include_router(api, prefix="/api", include_in_schema=False)
     app.include_router(visual_api)
+    app.include_router(observability_api)
 
     if static_dir is not None:
         index_path = static_dir / "index.html"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable, Mapping
 from copy import deepcopy
@@ -23,6 +24,7 @@ from kindred.config.schema import (
     KindredGatewayConfig,
     KindredLlmConfig,
     KindredLoggingConfig,
+    KindredObservabilityConfig,
     KindredPaths,
     KindredResidentConfig,
     KindredWebConfig,
@@ -58,6 +60,7 @@ ENV_LLM_CLAUDE_CODE_TIMEOUT_S = "KINDRED_LLM_CLAUDE_CODE_TIMEOUT_S"
 ENV_LOG_LEVEL = "KINDRED_LOG_LEVEL"
 ENV_DEBUG_DUMP = "KINDRED_DEBUG_DUMP"
 ENV_DEBUG_DUMP_DIR = "KINDRED_DEBUG_DUMP_DIR"
+ENV_OBSERVABILITY_ENABLED = "KINDRED_OBSERVABILITY_ENABLED"
 ENV_SESSION_KEY = "KINDRED_SESSION_KEY"
 ENV_GATEWAY_HOST = "KINDRED_GATEWAY_HOST"
 ENV_GATEWAY_PORT = "KINDRED_GATEWAY_PORT"
@@ -92,6 +95,7 @@ _SECTION_SCHEMAS: dict[str, type] = {
     "llm": KindredLlmConfig,
     "logging": KindredLoggingConfig,
     "debug": KindredDebugConfig,
+    "observability": KindredObservabilityConfig,
     "daemon": KindredDaemonConfig,
     "gateway": KindredGatewayConfig,
     "web": KindredWebConfig,
@@ -354,6 +358,10 @@ _ENV_OVERRIDES = {
         lambda value, field: _parse_bool(value, field),
     ),
     ENV_DEBUG_DUMP_DIR: _EnvOverride("paths.debug_dump_dir"),
+    ENV_OBSERVABILITY_ENABLED: _EnvOverride(
+        "observability.enabled",
+        lambda value, field: _parse_bool(value, field),
+    ),
     ENV_SESSION_KEY: _EnvOverride("daemon.session_key"),
     ENV_GATEWAY_HOST: _EnvOverride("gateway.host"),
     ENV_GATEWAY_PORT: _EnvOverride(
@@ -400,6 +408,7 @@ def _build_config(raw: Mapping[str, Any]) -> KindredConfig:
     llm_raw = _section(raw, "llm")
     logging_raw = _section(raw, "logging")
     debug_raw = _section(raw, "debug")
+    observability_raw = _section(raw, "observability")
 
     daemon = _build_daemon(_section(raw, "daemon"), paths)
     mouth_host = _build_mouth_host(_section(raw, _MOUTH_HOST_SECTION))
@@ -423,6 +432,27 @@ def _build_config(raw: Mapping[str, Any]) -> KindredConfig:
             dump_enabled=_bool_value(debug_raw, "dump_enabled"),
             dump_dir=paths.debug_dump_dir,
             dump_max_files=_positive_int_value(debug_raw, "dump_max_files"),
+        ),
+        observability=KindredObservabilityConfig(
+            enabled=_bool_value(observability_raw, "enabled"),
+            retention_days=_bounded_int_value(
+                observability_raw,
+                "retention_days",
+                minimum=1,
+                maximum=3650,
+            ),
+            daily_token_warn=_optional_positive_int_value(
+                observability_raw,
+                "daily_token_warn",
+            ),
+            tick_duration_warn_seconds=_optional_positive_float_value(
+                observability_raw,
+                "tick_duration_warn_seconds",
+            ),
+            dream_duration_warn_seconds=_optional_positive_float_value(
+                observability_raw,
+                "dream_duration_warn_seconds",
+            ),
         ),
         daemon=daemon,
         gateway=_build_gateway(_section(raw, "gateway")),
@@ -656,6 +686,38 @@ def _positive_int_value(raw: Mapping[str, Any], key: str) -> int:
     return value
 
 
+def _bounded_int_value(
+    raw: Mapping[str, Any],
+    key: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = _int_value(raw, key)
+    if not minimum <= value <= maximum:
+        raise KindredConfigError(f"{key} must be between {minimum} and {maximum}, got {value}")
+    return value
+
+
+def _optional_positive_int_value(raw: Mapping[str, Any], key: str) -> int | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    return _positive_int_value(raw, key)
+
+
+def _optional_positive_float_value(raw: Mapping[str, Any], key: str) -> float | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise KindredConfigError(f"{key} must be a positive finite number or null")
+    result = float(value)
+    if result <= 0 or not math.isfinite(result):
+        raise KindredConfigError(f"{key} must be a positive finite number or null")
+    return result
+
+
 def _tcp_port_value(raw: Mapping[str, Any], key: str) -> int:
     value = _int_value(raw, key)
     if not 1 <= value <= 65535:
@@ -755,6 +817,8 @@ DEFAULT_LLM_MODEL = DEFAULT_CONFIG.llm.model
 DEFAULT_LLM_PROVIDER = DEFAULT_CONFIG.llm.provider
 DEFAULT_LLM_CLAUDE_CODE_TIMEOUT_S = DEFAULT_CONFIG.llm.claude_code_timeout_s
 DEFAULT_LOG_LEVEL = DEFAULT_CONFIG.logging.level
+DEFAULT_OBSERVABILITY_ENABLED = DEFAULT_CONFIG.observability.enabled
+DEFAULT_OBSERVABILITY_RETENTION_DAYS = DEFAULT_CONFIG.observability.retention_days
 DEFAULT_SESSION_KEY = DEFAULT_CONFIG.daemon.session_key
 DEFAULT_RUN_DIR = DEFAULT_PATHS.run_dir
 DEFAULT_PID_FILE = DEFAULT_CONFIG.daemon.pid_file

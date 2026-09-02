@@ -7,12 +7,18 @@ import logging
 import os
 import time
 from collections.abc import Callable, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from kindred.llm._http_helpers import HttpClientHelpers
-from kindred.llm._http_helpers import compact_json as _compact_json
+from kindred.llm._http_helpers import (
+    HttpClientHelpers,
+    ParsedJsonResponse,
+)
+from kindred.llm._http_helpers import (
+    compact_json as _compact_json,
+)
 from kindred.llm.client import LlmClientError, ToolLoopError
 from kindred.llm.real_client import (
     act_tool_loop_system_prompt_for,
@@ -26,8 +32,10 @@ from kindred.llm.tools import (
     call_tool_handler,
     effect_for_tool,
     tool_map,
+    unknown_tool_result,
 )
-from kindred_capability_sdk import ToolCall, ToolDef, ToolResult
+from kindred.telemetry import LlmRequestObservation, extract_openai_usage, observe_llm_request
+from kindred_capability_sdk import ToolCall, ToolDef
 
 if TYPE_CHECKING:
     from kindred.config import KindredLlmConfig
@@ -46,6 +54,7 @@ class OpenAILlmClient:
     """Direct, non-streaming client for ``POST /v1/responses``."""
 
     _PROVIDER_NAME = "OpenAI"
+    _TELEMETRY_PROVIDER = "openai"
     _CLIENT_NAME = "OpenAILlmClient"
     _CLIENT_ERROR: type[LlmClientError] = OpenAILlmClientError
     _API_KEY_ENV = "OPENAI_API_KEY"
@@ -86,6 +95,7 @@ class OpenAILlmClient:
                 "cached_tokens": ("input_tokens_details", "cached_tokens"),
                 "reasoning_tokens": ("output_tokens_details", "reasoning_tokens"),
             },
+            usage_extractor=extract_openai_usage,
         )
 
     @classmethod
@@ -99,15 +109,30 @@ class OpenAILlmClient:
     def complete(self, prompt: str, *, role: Role) -> dict[str, Any]:
         input_items = _initial_input(system_prompt_for(role), prompt)
         payload = self._payload(input_items=input_items, tools=())
-        response = self._post(payload, role=role, round_index=1, max_rounds=1, tools=())
-        output = _response_output(response, role, self._protocol_error)
-        if any(item.get("type") == "function_call" for item in output):
-            raise self._protocol_error("response contains an unexpected function call", role)
-        return self._http_helpers.parse_json(
-            _output_text(output, role, self._protocol_error),
-            role,
-            protocol_error=self._protocol_error,
-        )
+        with observe_llm_request(
+            role=role,
+            round_index=1,
+            provider=self._TELEMETRY_PROVIDER,
+            requested_model=self._model,
+            prompt_shape_factory=partial(self._http_helpers.extract_prompt_shape, payload, ()),
+        ) as observation:
+            response = self._post(
+                payload,
+                role=role,
+                round_index=1,
+                max_rounds=1,
+                tools=(),
+                observation=observation,
+            )
+            output = _response_output(response, role, self._protocol_error)
+            if any(item.get("type") == "function_call" for item in output):
+                raise self._protocol_error("response contains an unexpected function call", role)
+            return self._http_helpers.parse_json(
+                _output_text(output, role, self._protocol_error),
+                role,
+                protocol_error=self._protocol_error,
+            )
+        raise AssertionError("LLM request observation suppressed control flow")
 
     def close(self) -> None:
         self._client.close()
@@ -132,16 +157,43 @@ class OpenAILlmClient:
 
         for round_index in range(1, max_rounds + 1):
             payload = self._payload(input_items=input_items, tools=tools)
+            final: dict[str, Any] | None = None
             try:
-                response = self._post(
-                    payload,
+                with observe_llm_request(
                     role=role,
                     round_index=round_index,
-                    max_rounds=max_rounds,
-                    tools=tools,
-                )
-                output = _response_output(response, role, self._protocol_error)
-                calls = _parse_tool_calls(output, role, self._protocol_error)
+                    provider=self._TELEMETRY_PROVIDER,
+                    requested_model=self._model,
+                    prompt_shape_factory=partial(
+                        self._http_helpers.extract_prompt_shape, payload, tools
+                    ),
+                ) as observation:
+                    response = self._post(
+                        payload,
+                        role=role,
+                        round_index=round_index,
+                        max_rounds=max_rounds,
+                        tools=tools,
+                        observation=observation,
+                    )
+                    output = _response_output(response, role, self._protocol_error)
+                    calls = _parse_tool_calls(output, role, self._protocol_error)
+                    if not calls:
+                        try:
+                            final = self._http_helpers.parse_json(
+                                _output_text(output, role, self._protocol_error),
+                                role,
+                                protocol_error=self._protocol_error,
+                            )
+                        except LlmClientError as exc:
+                            raise ToolLoopError(
+                                f"{self._CLIENT_NAME}: invalid tool-loop final JSON (role={role})",
+                                tool_events=events,
+                                rounds=round_index,
+                                raw_text=exc.raw_text,
+                            ) from exc
+            except ToolLoopError:
+                raise
             except LlmClientError as exc:
                 self._http_helpers.raise_or_wrap(
                     str(exc), events, round_index - 1, raw_text=exc.raw_text
@@ -151,13 +203,14 @@ class OpenAILlmClient:
                 input_items.extend(output)
                 for call in calls:
                     result = (
-                        call_tool_handler(handler, call)
-                        if call.name in known_tools
-                        else ToolResult.error(
+                        call_tool_handler(
+                            handler,
                             call,
-                            error_type="UnknownTool",
-                            message="tool is not registered",
+                            tool_def=known_tools[call.name],
+                            round_index=round_index,
                         )
+                        if call.name in known_tools
+                        else unknown_tool_result(call, round_index=round_index)
                     )
                     events.append(
                         ToolEvent(
@@ -176,19 +229,7 @@ class OpenAILlmClient:
                     )
                 continue
 
-            try:
-                final = self._http_helpers.parse_json(
-                    _output_text(output, role, self._protocol_error),
-                    role,
-                    protocol_error=self._protocol_error,
-                )
-            except LlmClientError as exc:
-                raise ToolLoopError(
-                    f"{self._CLIENT_NAME}: invalid tool-loop final JSON (role={role})",
-                    tool_events=events,
-                    rounds=round_index,
-                    raw_text=exc.raw_text,
-                ) from exc
+            assert final is not None
             return ToolLoopResult(final=final, tool_events=tuple(events), rounds=round_index)
 
         raise ToolLoopError(
@@ -235,13 +276,14 @@ class OpenAILlmClient:
         round_index: int,
         max_rounds: int,
         tools: Sequence[ToolDef],
-    ) -> httpx.Response:
-        self._http_helpers.log_request_budget(payload, role, round_index, max_rounds, tools)
-        started = time.perf_counter()
-        response: httpx.Response | None = None
+        observation: LlmRequestObservation,
+    ) -> ParsedJsonResponse:
+        started: float | None = None
+        raw_response: httpx.Response | None = None
         transport_error_type: str | None = None
         try:
-            response = self._client.post(
+            request = self._client.build_request(
+                "POST",
                 f"{self._base_url}/responses",
                 json=payload,
                 headers={
@@ -249,25 +291,58 @@ class OpenAILlmClient:
                     "Content-Type": "application/json",
                 },
             )
+            payload_json_bytes = len(request.content)
+            observation.record_payload_json_bytes(payload_json_bytes)
+            self._http_helpers.log_request_budget(
+                payload,
+                role,
+                round_index,
+                max_rounds,
+                tools,
+                payload_json_bytes=payload_json_bytes,
+            )
+            observation.mark_request_started()
+            started = time.perf_counter()
+            raw_response = self._client.send(request)
         except httpx.HTTPError as exc:
             self._http_helpers.log_response_budget(
-                None, role, round_index, time.perf_counter() - started
+                None,
+                role,
+                round_index,
+                0.0 if started is None else time.perf_counter() - started,
             )
             transport_error_type = type(exc).__name__
-        if response is None:
+        if raw_response is None:
             assert transport_error_type is not None
             raise self._CLIENT_ERROR(
                 f"{self._CLIENT_NAME}: HTTP request failed "
                 f"(role={role}, model={self._model}, error_type={transport_error_type})"
             )
-        self._http_helpers.log_response_budget(
-            response, role, round_index, time.perf_counter() - started
-        )
-        if response.status_code != httpx.codes.OK:
-            raise self._CLIENT_ERROR(
-                f"{self._CLIENT_NAME}: HTTP {response.status_code} "
-                f"(role={role}, model={self._model}, response_bytes={len(response.content)})"
+        if raw_response.status_code != httpx.codes.OK:
+            self._http_helpers.log_response_budget(
+                None,
+                role,
+                round_index,
+                0.0 if started is None else time.perf_counter() - started,
+                status_code=raw_response.status_code,
             )
+            observation.record_http_status(raw_response.status_code)
+            raise self._CLIENT_ERROR(
+                f"{self._CLIENT_NAME}: HTTP {raw_response.status_code} "
+                f"(role={role}, model={self._model}, response_bytes={len(raw_response.content)})"
+            )
+        response = ParsedJsonResponse.parse(raw_response)
+        self._http_helpers.log_response_budget(
+            response,
+            role,
+            round_index,
+            0.0 if started is None else time.perf_counter() - started,
+        )
+        observation.record_response(
+            http_status=raw_response.status_code,
+            usage_factory=lambda: self._http_helpers.canonical_usage(response),
+            response_model_factory=lambda: self._http_helpers.response_model(response),
+        )
         return response
 
     def _protocol_error(
@@ -299,14 +374,13 @@ def _initial_input(system: str, prompt: str) -> list[dict[str, Any]]:
 
 
 def _response_output(
-    response: httpx.Response,
+    response: ParsedJsonResponse,
     role: Role,
     protocol_error: _ProtocolError,
 ) -> list[dict[str, Any]]:
-    try:
-        body = response.json()
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise protocol_error("response is not JSON", role) from exc
+    if response.json_error:
+        raise protocol_error("response is not JSON", role)
+    body = response.body
     if not isinstance(body, dict):
         raise protocol_error("response root is not object", role)
     status = body.get("status")

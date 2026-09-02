@@ -453,6 +453,7 @@ def test_unified_installer_dispatches_host_before_shared_preflight(
     events: list[str] = []
     config_path = tmp_path / "config.yaml"
     monkeypatch.setattr(installer.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(installer, "materialize_runtime_assets", lambda: events.append("assets"))
     monkeypatch.setattr(installer, "_discover_hosts", lambda: (("openclaw", None),))
     monkeypatch.setattr(installer, "_select_host", lambda hosts: hosts[0])
     monkeypatch.setattr(
@@ -472,6 +473,11 @@ def test_unified_installer_dispatches_host_before_shared_preflight(
     )
     monkeypatch.setattr(
         installer,
+        "_install_xhs_service",
+        lambda _path: events.append("xhs"),
+    )
+    monkeypatch.setattr(
+        installer,
         "_install_platform_services",
         lambda _path: events.append("service"),
     )
@@ -479,7 +485,7 @@ def test_unified_installer_dispatches_host_before_shared_preflight(
     assert installer.install.callback is not None
     installer.install.callback()
 
-    assert events == ["flow:openclaw", "host", "doctor", "service"]
+    assert events == ["assets", "flow:openclaw", "host", "doctor", "xhs", "service"]
 
 
 def test_openclaw_profiles_are_verified_and_unknown_identity_only_warns() -> None:

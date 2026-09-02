@@ -13,6 +13,17 @@ from kindred_capability_sdk import SideEffectFact, ToolCall, ToolResult
 
 
 @dataclass(frozen=True)
+class ArtifactProfileRoute:
+    """Package-owned selector for an Artifact producer profile."""
+
+    producer_capability: str
+    selector_capability: str
+    profile: str
+    member_paths: Mapping[str, str] = field(default_factory=dict)
+    source_ref_kinds: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class HostToolResult:
     """Result returned by a Host internal tool handler."""
 
@@ -48,6 +59,7 @@ HostToolHandler = Callable[[ToolCall, HostTickContext], HostToolResult]
 
 
 __all__ = [
+    "ArtifactProfileRoute",
     "HostTickContext",
     "HostToolHandler",
     "HostToolResult",

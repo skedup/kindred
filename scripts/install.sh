@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION=0.3.1
+VERSION=0.4.0
 BASE_URL=${KINDRED_RELEASE_BASE_URL:-https://github.com/skedup/kindred/releases/download/v$VERSION}
 DATA_HOME=${XDG_DATA_HOME:-"$HOME/.local/share"}; RUNTIME_ROOT="$DATA_HOME/kindred/runtime"
 BIN_DIR="$HOME/.local/bin"
@@ -51,9 +51,22 @@ LC_ALL=C tar -tvzf "$TMP/$BUNDLE" | awk 'substr($1,1,1) !~ /^[-d]$/ { exit 1 }' 
 
 mkdir -p "$RUNTIME_ROOT"; FINAL="$RUNTIME_ROOT/$VERSION"
 mkdir "$TMP/stage"; LC_ALL=C tar -xzf "$TMP/$BUNDLE" -C "$TMP/stage"
-[ -f "$TMP/stage/python-runtime.tar.gz" ] && [ -d "$TMP/stage/wheelhouse" ] || fail 'bundle layout is incomplete'
+[ -f "$TMP/stage/python-runtime.tar.gz" ] && [ -d "$TMP/stage/wheelhouse" ] && [ -f "$TMP/stage/services/xhs-mcp-sidecar.tar.gz" ] || fail 'bundle layout is incomplete'
 LC_ALL=C tar -xzf "$TMP/stage/python-runtime.tar.gz" -C "$TMP/stage"; rm "$TMP/stage/python-runtime.tar.gz"
 [ -x "$TMP/stage/python/bin/python3" ] || fail 'Python runtime layout is incomplete'
+
+SIDECAR="$TMP/stage/services/xhs-mcp-sidecar.tar.gz"
+LC_ALL=C tar -tzf "$SIDECAR" >"$TMP/sidecar-members"
+sidecar_root=
+while IFS= read -r member; do
+  case "/$member/" in */../*|//*|*\\*) fail 'sidecar contains an unsafe path' ;; esac
+  root=${member%%/*}; [ -n "$root" ] || fail 'sidecar layout is incomplete'
+  [ -z "$sidecar_root" ] && sidecar_root=$root
+  [ "$root" = "$sidecar_root" ] || fail 'sidecar layout is incomplete'
+done <"$TMP/sidecar-members"
+LC_ALL=C tar -tvzf "$SIDECAR" | awk 'substr($1,1,1) !~ /^[-d]$/ { exit 1 }' || fail 'sidecar contains links or special files'
+mkdir "$TMP/stage/services/xhs-mcp"; LC_ALL=C tar -xzf "$SIDECAR" --strip-components=1 -C "$TMP/stage/services/xhs-mcp"; rm "$SIDECAR"
+[ -x "$TMP/stage/services/xhs-mcp/bin/kindred-xhs" ] || fail 'sidecar layout is incomplete'
 
 cat >"$TMP/install.py" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
@@ -79,9 +92,26 @@ if action == "install":
                     "--find-links", str(wheelhouse), *files], check=True)
 PY
 
-"$TMP/stage/python/bin/python3" "$TMP/install.py" verify "$TMP/manifest.json" "$TMP/stage/wheelhouse" "$TMP/$BUNDLE" "$PLATFORM" "$VERSION" "${KINDRED_NO_WEB:-0}"; rm -rf "$FINAL"; mv "$TMP/stage" "$FINAL"
-"$FINAL/python/bin/python3" -m venv "$FINAL/venv"; "$FINAL/venv/bin/python" "$TMP/install.py" install "$TMP/manifest.json" "$FINAL/wheelhouse" "$TMP/$BUNDLE" "$PLATFORM" "$VERSION" "${KINDRED_NO_WEB:-0}"
+"$TMP/stage/python/bin/python3" "$TMP/install.py" verify "$TMP/manifest.json" "$TMP/stage/wheelhouse" "$TMP/$BUNDLE" "$PLATFORM" "$VERSION" "${KINDRED_NO_WEB:-0}"
+PREVIOUS="$RUNTIME_ROOT/.$VERSION.previous"
+[ ! -e "$PREVIOUS" ] || fail 'a previous interrupted installation requires operator cleanup'
+[ ! -e "$FINAL" ] || mv "$FINAL" "$PREVIOUS"
+if ! mv "$TMP/stage" "$FINAL"; then
+  [ ! -e "$PREVIOUS" ] || mv "$PREVIOUS" "$FINAL"
+  fail 'runtime publish failed'
+fi
+
+restore_previous() {
+  rm -rf "$FINAL"
+  [ ! -e "$PREVIOUS" ] || mv "$PREVIOUS" "$FINAL"
+  fail "$1"
+}
+
+"$FINAL/python/bin/python3" -m venv "$FINAL/venv" || restore_previous 'runtime environment creation failed'
+"$FINAL/venv/bin/python" "$TMP/install.py" install "$TMP/manifest.json" "$FINAL/wheelhouse" "$TMP/$BUNDLE" "$PLATFORM" "$VERSION" "${KINDRED_NO_WEB:-0}" || restore_previous 'wheel installation failed'
+"$FINAL/venv/bin/python" -m kindred.runtime.materialize_assets || restore_previous 'runtime assets materialization failed'
 
 printf '%s\n' "$VERSION" >"$FINAL/.kindred-release-version"; mkdir -p "$BIN_DIR"; ln -sfn "$FINAL/venv/bin/kindred" "$BIN_DIR/kindred"
+rm -rf "$PREVIOUS"
 [ -t 1 ] && [ -r /dev/tty ] && exec "$BIN_DIR/kindred" install </dev/tty >/dev/tty
 printf 'Kindred runtime installed. Continue in a terminal:\n  %s install\n' "$BIN_DIR/kindred"

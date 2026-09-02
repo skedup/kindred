@@ -45,10 +45,12 @@ import logging
 import os
 import time
 from collections.abc import Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
+from kindred.llm._http_helpers import ParsedJsonResponse, compact_json_chars
 from kindred.llm.client import LlmClientError, ToolLoopError
 from kindred.llm.real_client import (
     act_tool_loop_system_prompt_for,
@@ -64,6 +66,14 @@ from kindred.llm.tools import (
     call_tool_handler,
     effect_for_tool,
     tool_map,
+    unknown_tool_result,
+)
+from kindred.telemetry import (
+    CanonicalUsage,
+    PromptShape,
+    extract_gemini_usage,
+    observe_llm_request,
+    safe_response_model,
 )
 from kindred_capability_sdk import ToolCall, ToolDef, ToolResult
 
@@ -96,6 +106,7 @@ _USAGE_FIELDS = {
     "thoughtsTokenCount": "thinking_tokens",
     "candidatesTokenCount": "candidates_tokens",
     "totalTokenCount": "total_tokens",
+    "toolUsePromptTokenCount": "tool_use_prompt_tokens",
 }
 
 
@@ -200,35 +211,78 @@ class GeminiLlmClient:
             "content-type": "application/json",
         }
 
-        _log_request_budget(payload, role, 1, 1, ())
-        started = time.perf_counter()
-        resp: httpx.Response | None = None
-        transport_error_type: str | None = None
-        try:
-            resp = self._client.post(url, json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            _log_response_budget(None, role, 1, time.perf_counter() - started)
-            transport_error_type = type(exc).__name__
-        if resp is None:
-            assert transport_error_type is not None
-            msg = (
-                f"GeminiLlmClient: HTTP 请求失败 (role={role}, model={self._model}, "
-                f"error_type={transport_error_type})"
-            )
-            raise GeminiLlmClientError(msg)
+        with observe_llm_request(
+            role=role,
+            round_index=1,
+            provider="google",
+            requested_model=self._model,
+            prompt_shape_factory=partial(_extract_prompt_shape, payload),
+        ) as observation:
+            started: float | None = None
+            raw_response: httpx.Response | None = None
+            transport_error_type: str | None = None
+            try:
+                request = self._client.build_request("POST", url, json=payload, headers=headers)
+                payload_json_bytes = len(request.content)
+                observation.record_payload_json_bytes(payload_json_bytes)
+                _log_request_budget(
+                    payload,
+                    role,
+                    1,
+                    1,
+                    (),
+                    payload_json_bytes=payload_json_bytes,
+                )
+                observation.mark_request_started()
+                started = time.perf_counter()
+                raw_response = self._client.send(request)
+            except httpx.HTTPError as exc:
+                _log_response_budget(
+                    None,
+                    role,
+                    1,
+                    0.0 if started is None else time.perf_counter() - started,
+                )
+                transport_error_type = type(exc).__name__
+            if raw_response is None:
+                assert transport_error_type is not None
+                msg = (
+                    f"GeminiLlmClient: HTTP 请求失败 (role={role}, model={self._model}, "
+                    f"error_type={transport_error_type})"
+                )
+                raise GeminiLlmClientError(msg)
 
-        _log_response_budget(resp, role, 1, time.perf_counter() - started)
-        if resp.status_code != httpx.codes.OK:
-            # 不回显响应体（可能含模型/凭据相关诊断），只记状态码 + 字节数。
-            msg = (
-                f"GeminiLlmClient: HTTP {resp.status_code} (role={role}, "
-                f"model={self._model}, response_bytes={len(resp.content)})"
-            )
-            raise GeminiLlmClientError(msg)
+            if raw_response.status_code != httpx.codes.OK:
+                _log_response_budget(
+                    None,
+                    role,
+                    1,
+                    0.0 if started is None else time.perf_counter() - started,
+                    status_code=raw_response.status_code,
+                )
+                observation.record_http_status(raw_response.status_code)
+                # 不回显响应体（可能含模型/凭据相关诊断），只记状态码 + 字节数。
+                msg = (
+                    f"GeminiLlmClient: HTTP {raw_response.status_code} (role={role}, "
+                    f"model={self._model}, response_bytes={len(raw_response.content)})"
+                )
+                raise GeminiLlmClientError(msg)
 
-        text = self._extract_text(resp, role=role)
-        parsed = self._parse_json(text, role=role)
-        return parsed
+            response = ParsedJsonResponse.parse(raw_response)
+            _log_response_budget(
+                response,
+                role,
+                1,
+                0.0 if started is None else time.perf_counter() - started,
+            )
+            observation.record_response(
+                http_status=raw_response.status_code,
+                usage_factory=partial(_extract_response_usage, response),
+                response_model_factory=partial(_extract_response_model, response),
+            )
+            text = self._extract_text(response, role=role)
+            return self._parse_json(text, role=role)
+        raise AssertionError("LLM request observation suppressed control flow")
 
     def close(self) -> None:
         """关闭底层 httpx client（daemon 退出时调）。"""
@@ -268,55 +322,122 @@ class GeminiLlmClient:
 
         for round_index in range(1, max_rounds + 1):
             payload = self._tool_payload(role=role, contents=contents, tools=tools)
-            _log_request_budget(payload, role, round_index, max_rounds, tools)
-            started = time.perf_counter()
-            resp: httpx.Response | None = None
-            transport_error_type: str | None = None
-            try:
-                resp = self._client.post(
-                    url,
-                    json=payload,
-                    headers={
-                        "x-goog-api-key": self._api_key,
-                        "content-type": "application/json",
-                    },
-                )
-            except httpx.HTTPError as exc:
-                _log_response_budget(None, role, round_index, time.perf_counter() - started)
-                transport_error_type = type(exc).__name__
-            if resp is None:
-                assert transport_error_type is not None
-                msg = (
-                    "GeminiLlmClient: tool-loop HTTP 请求失败 "
-                    f"(role={role}, error_type={transport_error_type})"
-                )
-                self._raise_or_wrap_tool_loop(msg, events=events, rounds=round_index - 1)
+            final: dict[str, Any] | None = None
+            with observe_llm_request(
+                role=role,
+                round_index=round_index,
+                provider="google",
+                requested_model=self._model,
+                prompt_shape_factory=partial(_extract_prompt_shape, payload),
+            ) as observation:
+                started: float | None = None
+                raw_response: httpx.Response | None = None
+                transport_error_type: str | None = None
+                try:
+                    request = self._client.build_request(
+                        "POST",
+                        url,
+                        json=payload,
+                        headers={
+                            "x-goog-api-key": self._api_key,
+                            "content-type": "application/json",
+                        },
+                    )
+                    payload_json_bytes = len(request.content)
+                    observation.record_payload_json_bytes(payload_json_bytes)
+                    _log_request_budget(
+                        payload,
+                        role,
+                        round_index,
+                        max_rounds,
+                        tools,
+                        payload_json_bytes=payload_json_bytes,
+                    )
+                    observation.mark_request_started()
+                    started = time.perf_counter()
+                    raw_response = self._client.send(request)
+                except httpx.HTTPError as exc:
+                    _log_response_budget(
+                        None,
+                        role,
+                        round_index,
+                        0.0 if started is None else time.perf_counter() - started,
+                    )
+                    transport_error_type = type(exc).__name__
+                if raw_response is None:
+                    assert transport_error_type is not None
+                    msg = (
+                        "GeminiLlmClient: tool-loop HTTP 请求失败 "
+                        f"(role={role}, error_type={transport_error_type})"
+                    )
+                    self._raise_or_wrap_tool_loop(msg, events=events, rounds=round_index - 1)
 
-            _log_response_budget(resp, role, round_index, time.perf_counter() - started)
-            if resp.status_code != httpx.codes.OK:
-                msg = (
-                    f"GeminiLlmClient: tool-loop HTTP {resp.status_code} "
-                    f"(role={role}, model={self._model}, response_bytes={len(resp.content)})"
-                )
-                self._raise_or_wrap_tool_loop(msg, events=events, rounds=round_index - 1)
+                if raw_response.status_code != httpx.codes.OK:
+                    _log_response_budget(
+                        None,
+                        role,
+                        round_index,
+                        0.0 if started is None else time.perf_counter() - started,
+                        status_code=raw_response.status_code,
+                    )
+                    observation.record_http_status(raw_response.status_code)
+                    msg = (
+                        f"GeminiLlmClient: tool-loop HTTP {raw_response.status_code} "
+                        f"(role={role}, model={self._model}, "
+                        f"response_bytes={len(raw_response.content)})"
+                    )
+                    self._raise_or_wrap_tool_loop(msg, events=events, rounds=round_index - 1)
 
-            try:
-                content, parts = self._extract_tool_content(resp, role=role)
-            except GeminiLlmClientError as exc:
-                self._raise_or_wrap_tool_loop(
-                    str(exc),
-                    events=events,
-                    rounds=round_index - 1,
-                    raw_text=getattr(exc, "raw_text", None),
+                response = ParsedJsonResponse.parse(raw_response)
+                _log_response_budget(
+                    response,
+                    role,
+                    round_index,
+                    0.0 if started is None else time.perf_counter() - started,
                 )
+                observation.record_response(
+                    http_status=raw_response.status_code,
+                    usage_factory=partial(_extract_response_usage, response),
+                    response_model_factory=partial(_extract_response_model, response),
+                )
+                try:
+                    content, parts = self._extract_tool_content(response, role=role)
+                except GeminiLlmClientError as exc:
+                    self._raise_or_wrap_tool_loop(
+                        str(exc),
+                        events=events,
+                        rounds=round_index - 1,
+                        raw_text=getattr(exc, "raw_text", None),
+                    )
 
-            calls = self._extract_tool_calls(parts)
+                calls = self._extract_tool_calls(parts)
+                if not calls:
+                    text = self._parts_text(parts)
+                    if not text.strip():
+                        msg = f"GeminiLlmClient: tool-loop final 响应无非空文本 (role={role})"
+                        raise ToolLoopError(msg, tool_events=events, rounds=round_index)
+                    try:
+                        final = self._parse_json(text, role=role)
+                    except GeminiLlmClientError as exc:
+                        msg = f"GeminiLlmClient: tool-loop final 非合法 JSON (role={role})：{exc}"
+                        raise ToolLoopError(
+                            msg,
+                            tool_events=events,
+                            rounds=round_index,
+                            raw_text=getattr(exc, "raw_text", None),
+                        ) from exc
+
             if calls:
                 # 原样回放模型 content：Gemini functionCall parts 可能携带 thoughtSignature。
                 contents.append(content)
                 response_parts: list[dict[str, Any]] = []
                 for call in calls:
-                    result = self._tool_result_for_call(call, handler, known_tools)
+                    result = self._tool_result_for_call(
+                        call,
+                        handler,
+                        known_tools,
+                        round_index=round_index,
+                    )
                     events.append(
                         ToolEvent(
                             round_index=round_index,
@@ -329,20 +450,7 @@ class GeminiLlmClient:
                 contents.append({"role": "user", "parts": response_parts})
                 continue
 
-            text = self._parts_text(parts)
-            if not text.strip():
-                msg = f"GeminiLlmClient: tool-loop final 响应无非空文本 (role={role})"
-                raise ToolLoopError(msg, tool_events=events, rounds=round_index)
-            try:
-                final = self._parse_json(text, role=role)
-            except GeminiLlmClientError as exc:
-                msg = f"GeminiLlmClient: tool-loop final 非合法 JSON (role={role})：{exc}"
-                raise ToolLoopError(
-                    msg,
-                    tool_events=events,
-                    rounds=round_index,
-                    raw_text=getattr(exc, "raw_text", None),
-                ) from exc
+            assert final is not None
             return ToolLoopResult(final=final, tool_events=tuple(events), rounds=round_index)
 
         msg = f"GeminiLlmClient: tool-loop 达到 max_rounds={max_rounds} 仍无 final"
@@ -380,13 +488,12 @@ class GeminiLlmClient:
             payload["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
         return payload
 
-    def _extract_text(self, resp: httpx.Response, *, role: Role) -> str:
+    def _extract_text(self, response: ParsedJsonResponse, *, role: Role) -> str:
         """取 generateContent 响应里 candidate 的文本；先挡 prompt 拦截 / 异常 finishReason。"""
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError) as exc:
-            msg = f"GeminiLlmClient: 响应非 JSON (role={role})：{exc}"
-            raise GeminiLlmClientError(msg) from exc
+        if response.json_error:
+            msg = f"GeminiLlmClient: 响应非 JSON (role={role})"
+            raise GeminiLlmClientError(msg)
+        body = response.body
         if not isinstance(body, dict):
             msg = f"GeminiLlmClient: 响应顶层非 dict (role={role})"
             raise GeminiLlmClientError(msg)
@@ -432,17 +539,16 @@ class GeminiLlmClient:
 
     def _extract_tool_content(
         self,
-        resp: httpx.Response,
+        response: ParsedJsonResponse,
         *,
         role: Role,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """取 tool-loop candidate content 与 parts；保留 content 原样供历史回放。"""
 
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError) as exc:
-            msg = f"GeminiLlmClient: tool-loop 响应非 JSON (role={role})：{exc}"
-            raise GeminiLlmClientError(msg) from exc
+        if response.json_error:
+            msg = f"GeminiLlmClient: tool-loop 响应非 JSON (role={role})"
+            raise GeminiLlmClientError(msg)
+        body = response.body
         if not isinstance(body, dict):
             msg = f"GeminiLlmClient: tool-loop 响应顶层非 dict (role={role})"
             raise GeminiLlmClientError(msg)
@@ -512,14 +618,17 @@ class GeminiLlmClient:
         call: ToolCall,
         handler: ToolHandler,
         known_tools: dict[str, ToolDef],
+        *,
+        round_index: int,
     ) -> ToolResult:
         if call.name not in known_tools:
-            return ToolResult.error(
-                call,
-                error_type="UnknownTool",
-                message="tool is not registered",
-            )
-        return call_tool_handler(handler, call)
+            return unknown_tool_result(call, round_index=round_index)
+        return call_tool_handler(
+            handler,
+            call,
+            tool_def=known_tools[call.name],
+            round_index=round_index,
+        )
 
     @staticmethod
     def _function_response_part(call: ToolCall, result: ToolResult) -> dict[str, Any]:
@@ -583,12 +692,8 @@ def _part_text(value: object) -> str:
     return text if isinstance(text, str) else ""
 
 
-def _compact_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
 def _json_chars(value: object) -> int:
-    return len(_compact_json(value)) if value else 0
+    return compact_json_chars(value) if value else 0
 
 
 def _log_request_budget(
@@ -597,9 +702,31 @@ def _log_request_budget(
     round_index: int,
     max_rounds: int,
     tools: Sequence[ToolDef],
+    *,
+    payload_json_bytes: int | None = None,
 ) -> None:
     if not _LOG.isEnabledFor(logging.DEBUG):
         return
+    try:
+        shape = _extract_prompt_shape(payload, payload_json_bytes=payload_json_bytes)
+    except Exception as exc:  # noqa: BLE001 - debug projection must be fail-open
+        _LOG.debug("Gemini request_budget unavailable error_type=%s", type(exc).__name__)
+        return
+    budget = {
+        "role": role,
+        "round": round_index,
+        "max_rounds": max_rounds,
+        **shape.__dict__,
+        "tool_names": tuple(tool.name for tool in tools),
+    }
+    _LOG.debug("Gemini request_budget %s", budget, extra={"kindred_prompt_budget": budget})
+
+
+def _extract_prompt_shape(
+    payload: dict[str, Any],
+    *,
+    payload_json_bytes: int | None = None,
+) -> PromptShape:
     contents = payload["contents"]
     history = [item for item in contents[1:] if item.get("role") != "user"]
     results = [
@@ -609,47 +736,59 @@ def _log_request_budget(
         if isinstance(part.get("functionResponse"), dict)
     ]
     config = payload["generationConfig"]
-    budget = {
-        "role": role,
-        "round": round_index,
-        "max_rounds": max_rounds,
-        "payload_json_bytes": len(_compact_json(payload).encode()),
-        "system_text_chars": len(_part_text(payload["systemInstruction"])),
-        "initial_user_text_chars": len(_part_text(contents[0])),
-        "tool_schema_json_chars": _json_chars(payload.get("tools")),
-        "response_schema_json_chars": _json_chars(config.get("responseJsonSchema")),
-        "model_history_json_chars": _json_chars(history),
-        "tool_result_json_chars": _json_chars(results),
-        "tool_names": tuple(tool.name for tool in tools),
-    }
-    _LOG.debug("Gemini request_budget %s", budget, extra={"kindred_prompt_budget": budget})
+    return PromptShape(
+        payload_json_bytes=payload_json_bytes,
+        system_text_chars=len(_part_text(payload["systemInstruction"])),
+        initial_user_text_chars=len(_part_text(contents[0])),
+        tool_schema_json_chars=_json_chars(payload.get("tools")),
+        response_schema_json_chars=_json_chars(config.get("responseJsonSchema")),
+        model_history_json_chars=_json_chars(history),
+        tool_result_json_chars=_json_chars(results),
+    )
+
+
+def _extract_response_usage(response: ParsedJsonResponse) -> CanonicalUsage:
+    body = response.body
+    return extract_gemini_usage(body.get("usageMetadata") if isinstance(body, dict) else None)
+
+
+def _extract_response_model(response: ParsedJsonResponse) -> str | None:
+    body = response.body
+    return safe_response_model(body.get("modelVersion")) if isinstance(body, dict) else None
 
 
 def _log_response_budget(
-    resp: httpx.Response | None, role: Role, round_index: int, elapsed_s: float
+    response: ParsedJsonResponse | None,
+    role: Role,
+    round_index: int,
+    elapsed_s: float,
+    *,
+    status_code: int | None = None,
 ) -> None:
     if not _LOG.isEnabledFor(logging.DEBUG):
         return
     usage: dict[str, int] = {}
-    if resp is not None:
-        try:
-            raw = resp.json().get("usageMetadata", {})
-        except (AttributeError, ValueError):
-            raw = {}
-        raw = raw if isinstance(raw, dict) else {}
-        usage = {
-            safe: value
-            for provider, safe in _USAGE_FIELDS.items()
-            if isinstance((value := raw.get(provider)), int) and not isinstance(value, bool)
+    if response is not None:
+        canonical = _extract_response_usage(response)
+        values = {
+            "prompt_tokens": canonical.base_input_tokens,
+            "cached_tokens": canonical.cache_read_input_tokens,
+            "thinking_tokens": canonical.reasoning_output_tokens,
+            "candidates_tokens": canonical.visible_output_tokens,
+            "total_tokens": canonical.total_tokens,
+            "tool_use_prompt_tokens": canonical.tool_use_prompt_tokens,
         }
-    response = {
+        usage = {
+            safe: value for safe in _USAGE_FIELDS.values() if (value := values[safe]) is not None
+        }
+    budget = {
         "role": role,
         "round": round_index,
-        "status_code": resp.status_code if resp is not None else None,
+        "status_code": response.response.status_code if response is not None else status_code,
         "elapsed_ms": round(elapsed_s * 1000),
         **usage,
     }
-    _LOG.debug("Gemini response_budget %s", response, extra={"kindred_response_budget": response})
+    _LOG.debug("Gemini response_budget %s", budget, extra={"kindred_response_budget": budget})
 
 
 __all__ = ["GeminiLlmClient", "GeminiLlmClientError"]

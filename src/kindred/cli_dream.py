@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -162,16 +164,30 @@ def dream_run(
         client = MockLlmClient(scenario=cast("Scenario", scenario))
 
     try:
-        with KindredDB.open(db_path) as db:
+        with ExitStack() as resources:
+            from kindred.runtime.observed_invoke import (
+                create_runtime_telemetry,
+                observed_invoke,
+            )
+
+            telemetry = create_runtime_telemetry(config)
+            resources.callback(telemetry.close)
+            db = resources.enter_context(KindredDB.open(db_path))
             prev_state = db.get_state_latest() or {}
             graph = build_client_dream_graph(client, db, config=config)
             try:
-                final = graph.invoke(
-                    {
-                        "triggered_at": triggered_at,
-                        "dream_date": resolved_date,
-                        "prev_state": prev_state,
-                    }
+                final = observed_invoke(
+                    lambda: graph.invoke(
+                        {
+                            "triggered_at": triggered_at,
+                            "dream_date": resolved_date,
+                            "prev_state": prev_state,
+                        }
+                    ),
+                    telemetry=telemetry,
+                    run_kind="dream",
+                    execution_mode="real" if real else "mock",
+                    dream_date=date.fromisoformat(resolved_date),
                 )
             except (NodeContractError, LlmClientError) as exc:
                 click.echo(f"ERROR dream 失败（fail-fast）：{type(exc).__name__}: {exc}")
