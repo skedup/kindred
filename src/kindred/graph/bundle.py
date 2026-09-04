@@ -1,12 +1,9 @@
-"""嘴侧 bundle 渲染契约 (09-memory §4)。
+"""嘴侧 bundle 渲染数据形状 (09-memory §4)。
 
-09 §4.1 嘴侧 ``life/state/context-bundle.md`` 是状态快照（“现在在过什么”），
-分为 4 段：
-
-1. **NOW** —— 当下切片（state.time / activity / location / presence / 三 gauge）
-2. **Layer A** —— Episodes 压缩（最近 5 个 episode，read-time Python 函数）
-3. **Layer B** —— 最近轨迹（significance 中等，未触 Layer C 阈值的 tick）
-4. **Layer C** —— 高光闪回（``episode`` 视图：significance >= 7）
+09 §4.1 嘴侧 ``life/state/context-bundle.md`` 是 current-context 状态快照：
+最小 v2 envelope + NOW。当下切片包含 state.time / activity / location /
+presence / 三 gauge / active thoughts 与进行中计划；历史由 Mouth 按需调用
+``MemorySearch``，不再作为 Layer A/B/C 自动渲染。
 
 定位（为何在 graph/ 而非 state/）：
 ----------------------------------
@@ -25,7 +22,7 @@ state 包仍然仅纯“ta 的存在”。
 
 设计决定：
 - bundle 是**状态快照**，不是事件流——每 tick 整文重写（atomic tmpfile + rename）
-- Layer A/B/C 的具体筛选 / 压缩规则在渲染层落地，本节只暴露**数据形状**
+- 当前 renderer 直接消费已校验的 State；本模块保留早期强类型数据形状作为公开兼容面
 
 参考：09-memory.md §4 嘴侧 bundle 渲染规则
 """
@@ -64,7 +61,7 @@ class NowSection(StrictBase):
 
 
 class BundleSection(StrictBase):
-    """bundle 的一段（NOW / A / B / C 共用）。
+    """bundle section 的兼容数据形状；v2 current renderer 不再按 A/B/C 组装。
 
     只声明渲染产物形态。
 

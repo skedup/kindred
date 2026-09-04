@@ -9,10 +9,8 @@
   单事务原子写 ``tick`` 表 +（``significance >= 7`` 时）``episode_recall``。
   rowid 写回 ``state["tick_id"]`` 给后两节点用。
 - ``write_memory``：三元组 diff 找出本 tick 新增的 thoughts，单事务批量 INSERT。
-- ``flush_bundle``：整文重写 ``context-bundle.md`` = NOW 段（next_state）+ Layer A/B/C
-  （read-time 渲染，见 ``_bundle_layers``，逐段独立兜底 §4.5）；atomic ``tmpfile + rename``。
-  Layer C 走 ``episode JOIN episode_recall``（cooldown>0），写成后衰减选中高光 cooldown
-  （§4.4.4.2 F-1 防御）——故本节点对 DB 有一处写（容错，失败不崩 tick）。
+- ``flush_bundle``：整文重写 ``context-bundle.md``，只投影当前 ``next_state``，
+  历史统一由 Mouth 按需调用 ``MemorySearch``；atomic ``tmpfile + rename``。
 
 factory 模式注入 deps
 =====================
@@ -45,7 +43,6 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -55,7 +52,6 @@ from kindred.graph._shared._common import (
     validate_state,
     validate_thoughts,
 )
-from kindred.graph.tick import _bundle_layers as _layers
 from kindred.graph.tick._possession_narrative import current_possession_fact_lines
 from kindred.relationship import render_relationship_summary
 from kindred.relationship.models import RelationshipChange
@@ -282,91 +278,14 @@ def _write_memory_impl(deps: PersistDeps, state: TickState) -> NodeReturn:
     return {}
 
 
-# 三段 header（与 _bundle_layers 渲染输出一致；降级兜底也用同 header，09 §4.3）。
-_HEADER_A = "## 最近 5 个 tick"
-_HEADER_B = "## 今天"
-_HEADER_C = "## 过去 7 天的高光（按近到远）"
-
-# Layer B「今天」拉取上限：一天醒 5min/睡 1h 心跳，单日 tick 远不足此数（防异常爆量）。
-_LAYER_B_DAY_POOL = 1000
-# Layer C 高光回看窗口（天）。
-_LAYER_C_LOOKBACK_DAYS = 7
-
-
-def _seg_fallback(header: str, exc: object) -> str:
-    """单段渲染失败兜底（09 §4.5：`> ⚠️ 本段渲染失败：<原因>`，不阻塞其他段）。"""
-    return f"{header}\n\n> ⚠️ 本段渲染失败：{exc}"
-
-
-def _safe_segment(header: str, label: str, render: Callable[[], str]) -> str:
-    """跑一段渲染；该段失败只降级该段（N-2 / §4.5），不连累其他段。按 layer 打点。"""
-    try:
-        return render()
-    except Exception as exc:  # noqa: BLE001 - 单段失败隔离，降级不崩 tick
-        _LOG.warning("T3.persist.flush_bundle: %s 渲染失败，降级：%s", label, exc)
-        return _seg_fallback(header, exc)
-
-
-def _render_history_layers(deps: PersistDeps, now_iso: str) -> tuple[list[str], list[int]]:
-    """渲染 Layer A/B/C，**逐段独立兜底**（§4.5）。返回 (三段文本, Layer C 选中的高光 tick_id)。
-
-    时间基准用 **next_state.time.iso（她的世界时）**，不是墙钟：Layer B「今天」/ Layer C「7 天内」
-    都相对她的时间线（ts 单时区 ISO，字符串比较即可）。选中的高光 id 交给调用方在 bundle 写成后
-    衰减 cooldown（N-1 / §4.4.4.2）。
-    """
-    try:
-        now_dt = datetime.fromisoformat(now_iso)
-        day_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        lookback = (now_dt - timedelta(days=_LAYER_C_LOOKBACK_DAYS)).isoformat()
-    except ValueError as exc:
-        _LOG.warning("T3.persist.flush_bundle: now_iso 解析失败，三段降级：%s", exc)
-        return (
-            [_seg_fallback(h, exc) for h in (_HEADER_A, _HEADER_B, _HEADER_C)],
-            [],
-        )
-
-    layer_a = _safe_segment(
-        _HEADER_A,
-        "Layer A",
-        lambda: _layers.render_layer_a(
-            deps.db.get_ticks_for_bundle(limit=_layers.LAYER_A_RAW_POOL)
-        ),
-    )
-    layer_b = _safe_segment(
-        _HEADER_B,
-        "Layer B",
-        lambda: _layers.render_layer_b(
-            deps.db.get_ticks_for_bundle(limit=_LAYER_B_DAY_POOL, since_iso=day_start)
-        ),
-    )
-    layer_c, recall_ids = _safe_layer_c(deps, lookback)
-    return [layer_a, layer_b, layer_c], recall_ids
-
-
-def _safe_layer_c(deps: PersistDeps, lookback: str) -> tuple[str, list[int]]:
-    """Layer C 段：取高光（episode JOIN episode_recall, cooldown>0）+ 渲染 + 收集选中 id。
-
-    选中 id 供调用方写 bundle 后衰减 cooldown（§4.4.4.2）。本段失败只降级本段、返空 id（N-2）。
-    """
-    try:
-        rows = deps.db.get_highlight_episodes(since_iso=lookback, limit=_layers.LAYER_C_LIMIT)
-        recall_ids = [r["id"] for r in rows if isinstance(r.get("id"), int)]
-        return _layers.render_layer_c(rows), recall_ids
-    except Exception as exc:  # noqa: BLE001 - 单段失败隔离
-        _LOG.warning("T3.persist.flush_bundle: Layer C 渲染失败，降级：%s", exc)
-        return _seg_fallback(_HEADER_C, exc), []
-
-
 def _flush_bundle_impl(deps: PersistDeps, state: TickState) -> NodeReturn:
     """T3 第 3 节点真实现。
 
     14 §3.7：可容忍失败。
 
-    NOW 段（09 §4.4.1）从 next_state 渲染；Layer A/B/C（§4.4.2/3/4）read-time 从库渲染，**逐段
-    独立兜底**（§4.5：某段失败只降级该段、不连累其他段，node 容错语义不崩 tick）。Layer C 走
-    ``episode JOIN episode_recall``（cooldown>0），bundle **写成后**对选中的高光 ``cooldown -= 50``
-    （§4.4.4.2 F-1 自反馈防御，避免同一高光每 tick 重复闪回）——故 flush_bundle 对 DB 有这一处写。
-    衰减容错（失败只记 warning，不崩 tick）。atomic tmpfile + rename 写入路径不变。
+    bundle 是带最小 v2 envelope 的 current-context 完整快照：只从本 tick 已提交的
+    ``next_state`` 渲染，不查询历史 tick，也不消费 ``episode_recall``。历史由 Mouth
+    需要时通过 ``MemorySearch`` 召回。atomic tmpfile + rename 写入路径不变。
     """
     node = "t3.persist.flush_bundle"
 
@@ -375,6 +294,15 @@ def _flush_bundle_impl(deps: PersistDeps, state: TickState) -> NodeReturn:
         "next_state",
         node=node,
         hint="T1.sense.derive 应已 deepcopy(prev_state)",
+    )
+    source_tick_id = cast(
+        "int",
+        _require_state_key(
+            state,
+            "tick_id",
+            node=node,
+            hint="write_state 应已提交 canonical tick 并 patch tick_id",
+        ),
     )
     next_state = validate_state(next_state_dict)
     now_iso = next_state.time.iso
@@ -390,27 +318,19 @@ def _flush_bundle_impl(deps: PersistDeps, state: TickState) -> NodeReturn:
         state.get("significance"),
         relationship_summary=relationship_summary,
     )
-    layers, recall_ids = _render_history_layers(deps, now_iso)
-    bundle_text = "\n\n".join([now_md, *layers])
+    bundle_text = _render_current_context_document(
+        now_md,
+        source_tick_id=source_tick_id,
+        as_of=now_iso,
+    )
 
     _atomic_write_text(deps.bundle_path, bundle_text)
     _LOG.info(
-        "T3.persist.flush_bundle path=%s bundle_bytes=%d recalled=%d",
+        "T3.persist.flush_bundle path=%s bundle_bytes=%d source_tick_id=%d",
         deps.bundle_path,
         len(bundle_text.encode("utf-8")),
-        len(recall_ids),
+        source_tick_id,
     )
-
-    # N-1（§4.4.4.2）：bundle 成功写入后，衰减本轮闪回过的高光 cooldown。容错：失败只记
-    # warning（高光下轮可能重复闪回），不崩 tick——与 flush_bundle 容错语义一致。
-    if recall_ids:
-        try:
-            with deps.db.transaction():
-                deps.db.decay_episode_recall(tick_ids=recall_ids, now_iso=now_iso)
-        except Exception as exc:  # noqa: BLE001 - 衰减失败不崩 tick
-            _LOG.warning(
-                "T3.persist.flush_bundle: episode_recall 衰减失败（高光可能重复闪回）：%s", exc
-            )
 
     return {}
 
@@ -484,6 +404,18 @@ def _render_now_section(
             f"inner_pulse={interior.inner_pulse.value}"
         ),
     ]
+    if state.interior.thoughts:
+        lines.extend(
+            ["- 当前念头：", *(f"  - {thought.description}" for thought in state.interior.thoughts)]
+        )
+    destinations = state.activity.context.destinations if state.activity.context is not None else {}
+    if destinations:
+        lines.extend(
+            [
+                "- 进行中计划：",
+                *(f"  - 前往「{plan.name}」（已计划、尚未到达）" for plan in destinations.values()),
+            ]
+        )
     if relationship_summary:
         lines.append(relationship_summary)
     if note:
@@ -491,6 +423,21 @@ def _render_now_section(
     if significance is not None:
         lines.append(f"- 重要度：{significance}/10")
     return "\n".join(lines)
+
+
+def _render_current_context_document(now_md: str, *, source_tick_id: int, as_of: str) -> str:
+    """用最小、宿主无关的 v2 envelope 包装完整 current-context 快照。"""
+    return "\n".join(
+        [
+            "---",
+            "kindred_context_version: v2",
+            f"source_tick_id: {source_tick_id}",
+            f'as_of: "{as_of}"',
+            "---",
+            "",
+            now_md,
+        ]
+    )
 
 
 def _weather_lines(env: Environment) -> list[str]:

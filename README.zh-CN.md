@@ -74,6 +74,38 @@ Hermes 支持保持 experimental：Kindred 只读消费已批准的 direct trans
 `api_content` replay 中；Kindred 不读取、覆盖或同步 Hermes `MEMORY.md` / `memories/USER.md`。
 `hermes send` 的不确定结果不会自动重试。
 
+## Episode Memory
+
+Kindred 可以从已经提交、显著度较高的 Episode 构建本地派生检索索引。canonical DB 始终是
+权威来源；同步和检索索引不会修改 State、tick 或 Mouth host 自己的 Memory。
+
+```sh
+kindred memory sync
+kindred memory search "那次发光的浪花" --channel lexical
+```
+
+派生索引保存在本机 `<life_root>/data/memory-index.db`，其中包含 Episode 正文，以及 identifier、时间、
+Activity、location（含 city/address）、mood、significance 等 metadata 的可检索副本，另有 normalized
+text 与 content hash；vector/hybrid 索引还包含在本机计算的 embedding。删除索引只会移除派生副本，
+随后可用 `kindred memory sync --rebuild` 从 canonical DB 重建。
+
+冻结的 `v0.4.0` Bundle 不会因本次源码修复而增加 optional package。从源码 checkout 使用时，可安装
+MCP transport，并通过 stdio 启动唯一的只读工具：
+
+```sh
+uv sync --no-dev --extra memory-mcp
+uv run --no-sync kindred memory serve-mcp --channel lexical
+```
+
+vector 与 hybrid 检索需要同时安装两个可选 extra，并按对应 channel 重建索引。该路径会从 Hugging
+Face 下载固定 revision 的模型 artifact；Episode 内容只在本机计算 embedding，不会上传给 Hugging Face。
+
+```sh
+uv sync --no-dev --extra memory-mcp --extra vector
+uv run --no-sync kindred memory sync --channel hybrid --rebuild
+uv run --no-sync kindred memory serve-mcp --channel hybrid
+```
+
 ## 数据边界
 
 Kindred 不会向外部服务发送 analytics、crash report 或诊断遥测。默认会在本地

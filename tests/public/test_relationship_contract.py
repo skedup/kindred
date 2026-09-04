@@ -284,7 +284,9 @@ def test_graph_preserves_private_relationship_change_across_act_branch(
 def test_production_graph_injects_one_relationship_authority_into_all_nodes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from kindred.capability_host.resources import LifeAssetView
     from kindred.config import load_kindred_config
+    from kindred.life_assets import ACTIONS_DIR, ACTIVITIES_DIR
     from kindred.runtime.tick_graph import build_client_tick_graph
 
     card = tmp_path / "character-card.yaml"
@@ -304,6 +306,10 @@ def test_production_graph_injects_one_relationship_authority_into_all_nodes(
     import kindred.graph as graph_module
     import kindred.graph.tick as node_module
 
+    monkeypatch.setattr(
+        "kindred.capability_host.runtime.load_runtime_life_assets",
+        lambda: LifeAssetView(ACTIONS_DIR, ACTIVITIES_DIR, ()),
+    )
     monkeypatch.setattr(node_module, "make_sense_io_node", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(node_module, "make_sense_derive_node", lambda **_kwargs: object())
 

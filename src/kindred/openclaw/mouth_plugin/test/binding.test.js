@@ -62,6 +62,17 @@ test("approved peer supports legacy and split channel identities", () => {
   }
 });
 
+test("approved peer rereads the current bundle on every turn", () => {
+  const f = fixture();
+  try {
+    assert.equal(loadMouthContext(f.ctx, { home: f.home }), "synthetic bundle");
+    writeFileSync(f.bundle, "new current context\n");
+    assert.equal(loadMouthContext(f.ctx, { home: f.home }), "new current context");
+  } finally {
+    rmSync(f.home, { recursive: true });
+  }
+});
+
 test("other peers and providers remain excluded", () => {
   const f = fixture();
   try {
