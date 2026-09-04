@@ -86,6 +86,43 @@ Persona only on first use or content change. Hermes may retain that context in i
 own `api_content` replay. Kindred does not read, replace, or synchronize Hermes
 `MEMORY.md` or `memories/USER.md`. An uncertain `hermes send` result is not retried.
 
+## Episode Memory
+
+Kindred can build a local, derived search index from committed high-significance
+episodes. The canonical database remains authoritative; syncing and searching the
+index do not change State, ticks, or the Mouth host's native memory.
+
+```sh
+kindred memory sync
+kindred memory search "the glowing waves" --channel lexical
+```
+
+The derived index is stored locally at `<life_root>/data/memory-index.db`. It
+contains searchable copies of episode text and metadata including identifiers,
+time, activity, location (including city/address), mood, and significance, plus
+normalized text and content hashes. Vector/hybrid indexes also contain locally
+computed embeddings. Removing the index removes only this derived copy, and
+`kindred memory sync --rebuild` recreates it from the canonical database.
+
+The frozen `v0.4.0` bundle does not gain optional packages from this source-only
+repair. From a source checkout, install the MCP transport and run its single
+read-only stdio tool with:
+
+```sh
+uv sync --no-dev --extra memory-mcp
+uv run --no-sync kindred memory serve-mcp --channel lexical
+```
+
+Vector and hybrid search require both optional extras and an index built for that
+channel. They download a pinned model artifact from Hugging Face; Episode content
+is embedded locally and is not uploaded to Hugging Face.
+
+```sh
+uv sync --no-dev --extra memory-mcp --extra vector
+uv run --no-sync kindred memory sync --channel hybrid --rebuild
+uv run --no-sync kindred memory serve-mcp --channel hybrid
+```
+
 ## Data Boundaries
 
 Kindred does not send analytics, crash reports, or diagnostic telemetry to an

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from importlib.metadata import version
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -67,7 +69,6 @@ def test_cli_contract_fixture_identity_is_frozen() -> None:
 
     assert contract["schema_version"] == 1
     assert contract["baseline"] == {
-        "click_version": version("click"),
         "prog_name": PROG_NAME,
         "source_commit": "95083ee1a2f517a3f76c5db55363ad8d55047838",
         "terminal_width": TERMINAL_WIDTH,
@@ -86,6 +87,32 @@ def test_packaged_install_skill_uses_the_single_public_entrypoint() -> None:
     assert "kindred install" in skill
     assert "kindred openclaw install" not in skill
     assert "kindred openclaw uninstall" not in skill
+
+
+def test_core_cli_does_not_import_optional_memory_dependencies(tmp_path: Path) -> None:
+    blocker = tmp_path / "blocked-optionals"
+    blocker.mkdir()
+    for module in ("fastembed", "huggingface_hub", "mcp"):
+        (blocker / f"{module}.py").write_text(
+            f"raise RuntimeError('{module} imported eagerly')\n",
+            encoding="utf-8",
+        )
+    source_root = Path(__file__).parents[2] / "src"
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join((str(blocker), str(source_root))),
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "from kindred.cli import cli; assert 'memory' in cli.commands"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_recovery_service_commands_do_not_parse_broken_runtime_config(

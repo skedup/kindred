@@ -56,6 +56,13 @@ web = [
 draw = [
   "kindred-capability-draw>=0.1.0,<0.2",
 ]
+vector = [
+  "fastembed==0.8.0",
+  "huggingface-hub>=0.20,<2.0",
+]
+memory-mcp = [
+  "mcp==2.1.1",
+]
 
 # ---- dev 门检依赖（PEP 735 dependency-groups）----
 # 为什么不用 [project.optional-dependencies].dev：
@@ -74,6 +81,7 @@ dev = [
   "types-PyYAML",        # mypy stub for pyyaml
   "fastapi>=0.110",      # web 层测试（TestClient）+ mypy 检 src/kindred/web
   "uvicorn>=0.27",       # serve 命令
+  "mcp==2.1.1",          # stdio memory adapter protocol tests
 ]
 
 [project.scripts]
