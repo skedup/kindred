@@ -10,7 +10,7 @@ optionally performs one activity step, validates the complete state, and then
 persists the result. OpenClaw or Hermes provides the conversation surface;
 portable capability packages add optional tools without changing the core graph.
 
-> **Public Preview:** `v0.4.0` supports one resident on one trusted host. It is
+> **Public Preview:** `v0.4.1` supports one resident on one trusted host. It is
 > intended for operators who are comfortable reviewing local configuration and
 > running pre-release software. This preview supports fresh installs only. Use a
 > fresh user/HOME; the installer refuses to overwrite a different preview version.
@@ -39,14 +39,14 @@ interactive installer:
 
 ```sh
 curl -fsSL \
-  https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh \
+  https://github.com/skedup/kindred/releases/download/v0.4.1/install.sh \
   | sh
 ```
 
 To inspect the bootstrap first:
 
 ```sh
-curl -fLO https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh
+curl -fLO https://github.com/skedup/kindred/releases/download/v0.4.1/install.sh
 less install.sh
 sh install.sh
 ```
@@ -104,14 +104,18 @@ normalized text and content hashes. Vector/hybrid indexes also contain locally
 computed embeddings. Removing the index removes only this derived copy, and
 `kindred memory sync --rebuild` recreates it from the canonical database.
 
-The frozen `v0.4.0` bundle does not gain optional packages from this source-only
-repair. From a source checkout, install the MCP transport and run its single
-read-only stdio tool with:
+The `v0.4.1` Complete Bundle includes the offline dependency closure for the
+single read-only Memory MCP tool. Build a lexical index explicitly, then start
+the server with the same channel:
 
 ```sh
-uv sync --no-dev --extra memory-mcp
-uv run --no-sync kindred memory serve-mcp --channel lexical
+kindred memory sync --channel lexical
+kindred memory serve-mcp --channel lexical
 ```
+
+Installing Kindred does not build an index or register this server with a Mouth
+host. See the [OpenClaw Memory MCP operator guide](docs/21-memory-mcp-openclaw.md)
+for the explicit registration, verification, and rollback commands.
 
 Vector and hybrid search require both optional extras and an index built for that
 channel. They download a pinned model artifact from Hugging Face; Episode content
@@ -144,6 +148,9 @@ receive the data required to do their work:
 - the map provider receives the home address used for world resolution;
 - the selected local Mouth host processes approved transcript history, Mouth
   context, and outbound dispatch;
+- when the operator registers Memory MCP and the Mouth host calls it, matching
+  Episode text and metadata are sent to that host and may enter its configured
+  LLM context;
 - capabilities explicitly enabled by the operator may call their own providers.
 
 Credentials and resident data stay outside the source distribution. Diagnostic
