@@ -7,7 +7,7 @@ Kindred 是一个连接既有 Mouth host 的自主 AI resident 运行时。它�
 中更新感知，可选择执行一个活动步骤，校验完整状态后再持久化。OpenClaw 或 Hermes 提供对话界面；
 Portable Capability package 可以在不修改核心 graph 的情况下增加外部工具。
 
-> **Public Preview：**`v0.4.0` 面向一台可信主机上的单 resident，适合愿意检查本地配置并
+> **Public Preview：**`v0.4.1` 面向一台可信主机上的单 resident，适合愿意检查本地配置并
 > 体验预发布软件的 operator。当前预览只支持全新安装，请使用全新用户/HOME；installer 会拒绝
 > 覆盖其他预览版本。
 
@@ -32,14 +32,14 @@ Portable Capability package 可以在不修改核心 graph 的情况下增加外
 
 ```sh
 curl -fsSL \
-  https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh \
+  https://github.com/skedup/kindred/releases/download/v0.4.1/install.sh \
   | sh
 ```
 
 也可以先检查脚本：
 
 ```sh
-curl -fLO https://github.com/skedup/kindred/releases/download/v0.4.0/install.sh
+curl -fLO https://github.com/skedup/kindred/releases/download/v0.4.1/install.sh
 less install.sh
 sh install.sh
 ```
@@ -89,13 +89,16 @@ Activity、location（含 city/address）、mood、significance 等 metadata 的
 text 与 content hash；vector/hybrid 索引还包含在本机计算的 embedding。删除索引只会移除派生副本，
 随后可用 `kindred memory sync --rebuild` 从 canonical DB 重建。
 
-冻结的 `v0.4.0` Bundle 不会因本次源码修复而增加 optional package。从源码 checkout 使用时，可安装
-MCP transport，并通过 stdio 启动唯一的只读工具：
+`v0.4.1` Complete Bundle 已包含唯一只读 Memory MCP 工具的离线依赖闭包。先显式构建 lexical 索引，
+再用相同 channel 启动 server：
 
 ```sh
-uv sync --no-dev --extra memory-mcp
-uv run --no-sync kindred memory serve-mcp --channel lexical
+kindred memory sync --channel lexical
+kindred memory serve-mcp --channel lexical
 ```
+
+安装 Kindred 不会自动建索引或向 Mouth host 注册该 server。完整的显式注册、验证与回滚命令见
+[OpenClaw Memory MCP 运维文档](docs/21-memory-mcp-openclaw.md)。
 
 vector 与 hybrid 检索需要同时安装两个可选 extra，并按对应 channel 重建索引。该路径会从 Hugging
 Face 下载固定 revision 的模型 artifact；Episode 内容只在本机计算 embedding，不会上传给 Hugging Face。
@@ -121,6 +124,8 @@ provider 仍会接收
 - 配置的 LLM 会接收选定的 Persona 与运行上下文；
 - 地图 provider 会接收用于 world resolution 的 home address；
 - 选定的本机 Mouth host 会处理已批准的 transcript、Mouth context 和 outbound dispatch；
+- operator 注册 Memory MCP 且 Mouth host 实际调用后，命中的 Episode 正文与 metadata 会发送给该 host，
+  并可能进入它所配置的 LLM 上下文；
 - operator 明确启用的 Capability 可能调用各自的 provider。
 
 Credential 和 resident 数据不会进入源码发行物。诊断输出只报告安全形状，不应展示消息、

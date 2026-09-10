@@ -555,6 +555,25 @@ def test_total_scan_budget_covers_the_whole_candidate(
     assert findings == (release.Finding("b.txt", "archive_limit", "archive_limit_exceeded"),)
 
 
+def test_archive_count_budget_still_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _load_module()
+    nested = io.BytesIO()
+    with zipfile.ZipFile(nested, "w") as archive:
+        archive.writestr("safe.txt", "safe")
+    outer = tmp_path / "archive-count.zip"
+    with zipfile.ZipFile(outer, "w") as archive:
+        archive.writestr("one.zip", nested.getvalue())
+        archive.writestr("two.zip", nested.getvalue())
+    monkeypatch.setattr(release, "_MAX_ARCHIVES", 2)
+
+    assert "archive_limit" in {
+        item.rule_id for item in release.scan_path(outer, {"schema_version": 1})
+    }
+
+
 def test_nested_archive_budget_exhaustion_stops_the_parent(tmp_path: Path) -> None:
     release = _load_module()
     nested = io.BytesIO()

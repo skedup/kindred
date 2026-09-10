@@ -29,6 +29,7 @@
     "distribution/public-allowlist.json",
     "distribution/release-inputs.json",
     "docs/19-desktop-spirit.md",
+    "docs/21-memory-mcp-openclaw.md",
     "hatch_build.py",
     "packages/kindred-capability-compose/LICENSE",
     "packages/kindred-capability-compose/README.md",
@@ -64,6 +65,7 @@
     "scripts/build_web.py",
     "scripts/install.sh",
     "scripts/public_release.py",
+    "scripts/verify_offline_install.py",
     "src/kindred/__init__.py",
     "src/kindred/__main__.py",
     "src/kindred/activity/__init__.py",
@@ -401,7 +403,7 @@
       "rule_ids": [
         "private_path"
       ],
-      "sha256": "6f72887b5c5081b55f2403bcc6283e9cd39e7a1d0f9a611e77e6a243f9777004"
+      "sha256": "49dc479ffb6c97f2afc019725f58ff999bcf63db18ffc372227767ea8c5ef486"
     }
   ]
 }

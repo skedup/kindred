@@ -43,6 +43,7 @@ def _load_inputs(root: Path) -> dict[str, Any]:
         raise ReleaseBuildError("release version does not match the root wheel")
     _validate_mouth_hosts(value.get("mouth_hosts"), set(value.get("platforms", {})))
     _validate_xhs(value.get("xiaohongshu"), set(value.get("platforms", {})))
+    _validate_memory(value.get("memory"), value.get("wheels"))
     return value
 
 
@@ -123,6 +124,23 @@ def _validate_xhs(value: object, platforms: set[str]) -> None:
         )
     ):
         raise ReleaseBuildError("Xiaohongshu release identity is invalid")
+
+
+def _validate_memory(value: object, wheels: object) -> None:
+    expected = {
+        "mcp_included": True,
+        "default_channel": "lexical",
+        "vector_included": False,
+        "automatic_sync": False,
+        "automatic_host_registration": False,
+    }
+    common = wheels.get("common") if isinstance(wheels, dict) else None
+    if (
+        value != expected
+        or not isinstance(common, list)
+        or ["mcp", "2.1.1", "mcp-2.1.1-py3-none-any.whl"] not in [row[:3] for row in common]
+    ):
+        raise ReleaseBuildError("Memory release identity is invalid")
 
 
 def _valid_frozen_file(size: object, digest: object) -> bool:
@@ -515,6 +533,7 @@ def build_release(root: Path, cache: Path, output: Path) -> dict[str, Any]:
             },
             "web": {"included": True, "build": web},
             "draw": {"included": True, "enabled_by_default": False},
+            "memory": inputs["memory"],
             "install_skill": {
                 "included": True,
                 "sha256": _sha256(root / "src/kindred/openclaw/install_skill/SKILL.md"),

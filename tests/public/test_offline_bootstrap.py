@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 
 def _command(path: Path, name: str, body: str) -> None:

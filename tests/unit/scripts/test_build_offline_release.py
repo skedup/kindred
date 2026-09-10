@@ -25,6 +25,16 @@ def _load_module() -> Any:
     return module
 
 
+def _load_install_verifier() -> Any:
+    script = Path(__file__).resolve().parents[3] / "scripts/verify_offline_install.py"
+    spec = importlib.util.spec_from_file_location("verify_offline_install", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _wheel(path: Path, name: str = "kindred", version: str = "0.1.0") -> Path:
     dist = name.replace("-", "_")
     target = path / f"{dist}-{version}-py3-none-any.whl"
@@ -80,7 +90,7 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
     root = Path(__file__).resolve().parents[3]
     inputs = json.loads((root / "distribution/release-inputs.json").read_text())
 
-    assert inputs["release_version"] == "0.4.0"
+    assert inputs["release_version"] == "0.4.1"
     assert set(inputs["mouth_hosts"]) == {"openclaw", "hermes"}
     assert len(inputs["mouth_hosts"]["openclaw"]["profiles"]) == 2
     assert inputs["mouth_hosts"]["hermes"]["maturity"] == "experimental"
@@ -96,14 +106,100 @@ def test_repository_release_inputs_freeze_two_complete_platforms() -> None:
     assert all(item[3].endswith(".whl") and len(item[4]) == 64 for item in inputs["first_party"])
     for platform in inputs["platforms"]:
         wheels = inputs["wheels"]["common"] + inputs["wheels"][platform]
-        assert len(wheels) == 46
-        assert len({item[0] for item in wheels}) == 46
-        assert sum(item[4] == "web" for item in wheels) == 4
+        assert len(wheels) == 60
+        assert len({item[0] for item in wheels}) == 60
+        assert sum(item[4] == "web" for item in wheels) == 2
         assert all(item[0] in inputs["licenses"] for item in wheels)
         assert all(len(item[3]) == 64 and item[2].endswith(".whl") for item in wheels)
     assert inputs["xiaohongshu"]["source_sha"] == "b019fdbf02ba0e8d4f4fdb4f15b58230a8493f5d"
     assert inputs["xiaohongshu"]["wheel"][1] == "0.3.3"
     assert {row[1] for row in inputs["xiaohongshu"]["sidecars"].values()} == {"2.7.2"}
+    assert inputs["memory"] == {
+        "mcp_included": True,
+        "default_channel": "lexical",
+        "vector_included": False,
+        "automatic_sync": False,
+        "automatic_host_registration": False,
+    }
+
+
+def test_install_closure_verifies_selected_manifest_wheels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _load_install_verifier()
+    manifest = {
+        "schema_version": 1,
+        "platforms": {
+            "fixture": {
+                "wheels": [
+                    {"distribution": "kindred", "version": "0.4.1", "group": "base"},
+                    {"distribution": "fastapi", "version": "0.141.1", "group": "web"},
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(
+        verifier,
+        "_installed_distributions",
+        lambda: {"kindred": "0.4.1", "fastapi": "0.141.1"},
+    )
+    monkeypatch.setattr(
+        verifier.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+
+    assert verifier.verify_install(manifest, "fixture", no_web=False) == 2
+
+
+def test_install_closure_rejects_identity_drift_and_fastapi_in_no_web(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _load_install_verifier()
+    manifest = {
+        "schema_version": 1,
+        "platforms": {
+            "fixture": {
+                "wheels": [
+                    {"distribution": "kindred", "version": "0.4.1", "group": "base"},
+                    {"distribution": "fastapi", "version": "0.141.1", "group": "web"},
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(verifier.subprocess, "run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(verifier, "_installed_distributions", lambda: {"kindred": "0.4.0"})
+    with pytest.raises(verifier.InstallClosureError, match="identity mismatch"):
+        verifier.verify_install(manifest, "fixture", no_web=True)
+
+    monkeypatch.setattr(
+        verifier,
+        "_installed_distributions",
+        lambda: {"kindred": "0.4.1", "fastapi": "0.141.1"},
+    )
+    with pytest.raises(verifier.InstallClosureError, match="contains FastAPI"):
+        verifier.verify_install(manifest, "fixture", no_web=True)
+
+
+def test_install_closure_rejects_pip_check_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier = _load_install_verifier()
+    manifest = {
+        "schema_version": 1,
+        "platforms": {
+            "fixture": {
+                "wheels": [{"distribution": "kindred", "version": "0.4.1", "group": "base"}]
+            }
+        },
+    }
+    monkeypatch.setattr(verifier, "_installed_distributions", lambda: {"kindred": "0.4.1"})
+    monkeypatch.setattr(
+        verifier.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1),
+    )
+
+    with pytest.raises(verifier.InstallClosureError, match="dependency check failed"):
+        verifier.verify_install(manifest, "fixture", no_web=False)
 
 
 def test_release_version_must_match_the_root_wheel(tmp_path: Path) -> None:
@@ -184,6 +280,7 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     first_party_dir = tmp_path / "first-party"
     first_party_dir.mkdir()
     first_party = _wheel(first_party_dir)
+    mcp_wheel = _wheel(first_party_dir, "mcp", "2.1.1")
     xhs_wheel = _wheel(first_party_dir, "kindred-capability-xiaohongshu", "0.3.3")
     python = _python_archive(tmp_path)
     digest = hashlib.sha256(python.read_bytes()).hexdigest()
@@ -234,6 +331,13 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
             },
         },
         "build_tools": {},
+        "memory": {
+            "mcp_included": True,
+            "default_channel": "lexical",
+            "vector_included": False,
+            "automatic_sync": False,
+            "automatic_host_registration": False,
+        },
         "first_party": [
             [
                 "kindred",
@@ -259,8 +363,20 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
             }
             for name in ("macos-arm64", "ubuntu24-x86_64")
         },
-        "wheels": {"common": [], "macos-arm64": [], "ubuntu24-x86_64": []},
-        "licenses": {"kindred-capability-xiaohongshu": "MIT"},
+        "wheels": {
+            "common": [
+                [
+                    "mcp",
+                    "2.1.1",
+                    mcp_wheel.name,
+                    hashlib.sha256(mcp_wheel.read_bytes()).hexdigest(),
+                    "base",
+                ]
+            ],
+            "macos-arm64": [],
+            "ubuntu24-x86_64": [],
+        },
+        "licenses": {"kindred-capability-xiaohongshu": "MIT", "mcp": "MIT"},
         "web_runtime": [],
     }
     distribution = root / "distribution"
@@ -270,6 +386,10 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
     (cache / "python" / python.name).write_bytes(python.read_bytes())
     (cache / "external").mkdir()
     (cache / "external" / xhs_wheel.name).write_bytes(xhs_wheel.read_bytes())
+    for platform in inputs["platforms"]:
+        wheel_cache = cache / "wheels" / platform
+        wheel_cache.mkdir(parents=True)
+        (wheel_cache / mcp_wheel.name).write_bytes(mcp_wheel.read_bytes())
     for sidecar in sidecars.values():
         (cache / "external" / sidecar.name).write_bytes(sidecar.read_bytes())
     monkeypatch.setattr(release, "_build_first_party", lambda *_args: [first_party])
@@ -288,6 +408,7 @@ def test_builder_emits_two_dereferenced_bundles_and_release_metadata(
         "sha256": hashlib.sha256(install_skill.read_bytes()).hexdigest(),
     }
     assert manifest["draw"] == {"included": True, "enabled_by_default": False}
+    assert manifest["memory"] == inputs["memory"]
     assert manifest["mouth_hosts"] == inputs["mouth_hosts"]
     assert manifest["mouth_plugins"]["openclaw"]["version"] == "0.3.0"
     assert manifest["mouth_plugins"]["hermes"]["version"] == "0.1.0"
